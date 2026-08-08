@@ -6712,11 +6712,24 @@ def fyers_save_token():
     global _QUOTE_COOLDOWN_UNTIL
     refresh_fyers_from_env()
     payload = request.get_json(silent=True) or {}
-    auth_code = extract_fyers_auth_code(payload.get("authCode") or payload.get("finalUrl"))
+    direct_token = (payload.get("accessToken") or payload.get("token") or "").strip()
     client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
     secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
     redirect_uri = "https://trade.fyers.in/api-login/redirect-uri/index.html"
 
+    if direct_token:
+        access_token = normalize_fyers_access_token(client_id, direct_token)
+        save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
+        _QUOTE_COOLDOWN_UNTIL = 0.0
+        refresh_fyers_from_env(force=True)
+        clear_live_market_caches()
+        return jsonify({
+            "ok": True,
+            "message": "Fyers access token directly saved and activated.",
+            **get_fyers_env_status(),
+        })
+
+    auth_code = extract_fyers_auth_code(payload.get("authCode") or payload.get("finalUrl"))
     if not fyersModel:
         return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
     if not client_id or not secret_key:
