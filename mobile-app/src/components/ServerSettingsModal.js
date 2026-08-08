@@ -1,5 +1,16 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View, Modal, ActivityIndicator, Alert, Switch } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+  Modal,
+  ActivityIndicator,
+  Alert,
+  Switch,
+  ScrollView,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
@@ -13,16 +24,35 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
 
+  // TOTP Login state
+  const [fyersId, setFyersId] = useState('');
+  const [fyersPin, setFyersPin] = useState('');
+  const [totpKey, setTotpKey] = useState('');
+  const [isTotpLoading, setIsTotpLoading] = useState(false);
+  const [totpStatus, setTotpStatus] = useState(null);
+
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [hapticEnabled, setHapticEnabled] = useState(true);
 
   React.useEffect(() => {
-    setInputUrl(serverUrl);
-    getStoredSettings().then((s) => {
-      setSoundEnabled(s.soundEnabled);
-      setHapticEnabled(s.hapticEnabled);
-    });
+    if (visible) {
+      setInputUrl(serverUrl);
+      getStoredSettings().then((s) => {
+        setSoundEnabled(s.soundEnabled);
+        setHapticEnabled(s.hapticEnabled);
+      });
+      checkTokenStatus();
+    }
   }, [visible, serverUrl]);
+
+  const checkTokenStatus = async () => {
+    try {
+      const res = await api.getFyersTokenStatus();
+      setTotpStatus(res);
+    } catch {
+      // silent
+    }
+  };
 
   const handleTestConnection = async () => {
     setIsTesting(true);
@@ -34,6 +64,28 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
       setTestResult({ success: false, message: `Failed: ${e.message}` });
     } finally {
       setIsTesting(false);
+    }
+  };
+
+  const handleTotpAutoLogin = async () => {
+    setIsTotpLoading(true);
+    try {
+      const payload = {};
+      if (fyersId.trim()) payload.fyersId = fyersId.trim();
+      if (fyersPin.trim()) payload.fyersPin = fyersPin.trim();
+      if (totpKey.trim()) payload.totpKey = totpKey.trim();
+
+      const res = await api.totpLogin(payload);
+      if (res && res.ok) {
+        Alert.alert('✅ Success', 'Fyers Token generated automatically via TOTP! Live market stream is now active.');
+        checkTokenStatus();
+      } else {
+        Alert.alert('❌ TOTP Login Failed', res?.error || 'Please check your Fyers credentials.');
+      }
+    } catch (e) {
+      Alert.alert('❌ Error', e.response?.data?.error || e.message || 'Failed to communicate with server.');
+    } finally {
+      setIsTotpLoading(false);
     }
   };
 
@@ -71,110 +123,170 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
             </TouchableOpacity>
           </View>
 
-          {/* Backend URL Input */}
-          <Text style={styles.inputLabel}>LIVE BACKEND SERVER URL</Text>
-          <Text style={styles.inputHelp}>
-            24/7 Cloud URL or local PC address
-          </Text>
-          <TextInput
-            style={styles.textInput}
-            value={inputUrl}
-            onChangeText={setInputUrl}
-            placeholder={CLOUD_SERVER_URL}
-            placeholderTextColor={THEME.colors.textDisabled}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+            {/* Backend URL Input */}
+            <Text style={styles.inputLabel}>LIVE BACKEND SERVER URL</Text>
+            <TextInput
+              style={styles.textInput}
+              value={inputUrl}
+              onChangeText={setInputUrl}
+              placeholder={CLOUD_SERVER_URL}
+              placeholderTextColor={THEME.colors.textDisabled}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
 
-          {/* Test connection & result */}
-          <View style={styles.testRow}>
+            {/* Test connection & result */}
+            <View style={styles.testRow}>
+              <TouchableOpacity
+                style={styles.testBtn}
+                onPress={handleTestConnection}
+                disabled={isTesting}
+              >
+                {isTesting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="wifi" size={14} color="#fff" />
+                    <Text style={styles.testBtnText}>Test Ping</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {testResult ? (
+                <Text style={[styles.resultText, testResult.success ? styles.successText : styles.errorText]}>
+                  {testResult.message}
+                </Text>
+              ) : null}
+            </View>
+
+            {/* Quick presets */}
+            <View style={styles.presetRow}>
+              <TouchableOpacity
+                style={[styles.presetBtn, styles.presetCloudBtn]}
+                onPress={() => setInputUrl(CLOUD_SERVER_URL)}
+              >
+                <Ionicons name="cloud" size={12} color={THEME.colors.primary} />
+                <Text style={[styles.presetText, { color: THEME.colors.primary }]}>☁️ Render Cloud (24/7)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.presetBtn}
+                onPress={() => setInputUrl('http://10.0.2.2:5000')}
+              >
+                <Text style={styles.presetText}>Android Local</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Fyers Automated TOTP Section */}
+            <View style={styles.divider} />
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.inputLabel}>FYERS AUTOMATED 2FA / TOTP LOGIN</Text>
+              <View style={[styles.tokenBadge, totpStatus?.accessTokenPresent ? styles.tokenActive : styles.tokenExpired]}>
+                <Text style={styles.tokenBadgeText}>
+                  {totpStatus?.accessTokenPresent ? '● TOKEN ACTIVE' : '○ TOKEN EXPIRED'}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.inputHelp}>
+              Enter your Fyers ID, PIN, and TOTP key once to auto-refresh access tokens in 1-tap:
+            </Text>
+
+            <TextInput
+              style={styles.textInput}
+              value={fyersId}
+              onChangeText={setFyersId}
+              placeholder="Fyers User ID (e.g. XA12345)"
+              placeholderTextColor={THEME.colors.textDisabled}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+
+            <TextInput
+              style={styles.textInput}
+              value={fyersPin}
+              onChangeText={setFyersPin}
+              placeholder="4-Digit Fyers Login PIN"
+              placeholderTextColor={THEME.colors.textDisabled}
+              secureTextEntry
+              keyboardType="number-pad"
+              maxLength={4}
+            />
+
+            <TextInput
+              style={styles.textInput}
+              value={totpKey}
+              onChangeText={setTotpKey}
+              placeholder="TOTP Secret Key (from Fyers 2FA setup)"
+              placeholderTextColor={THEME.colors.textDisabled}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
             <TouchableOpacity
-              style={styles.testBtn}
-              onPress={handleTestConnection}
-              disabled={isTesting}
+              style={styles.totpBtn}
+              onPress={handleTotpAutoLogin}
+              disabled={isTotpLoading}
             >
-              {isTesting ? (
+              {isTotpLoading ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
-                  <Ionicons name="wifi" size={14} color="#fff" />
-                  <Text style={styles.testBtnText}>Test Ping</Text>
+                  <Ionicons name="flash" size={16} color="#071a26" />
+                  <Text style={styles.totpBtnText}>Generate Token via TOTP (Auto Login)</Text>
                 </>
               )}
             </TouchableOpacity>
 
-            {testResult ? (
-              <Text style={[styles.resultText, testResult.success ? styles.successText : styles.errorText]}>
-                {testResult.message}
-              </Text>
-            ) : null}
-          </View>
+            {/* Alert Preferences */}
+            <View style={styles.divider} />
+            <Text style={styles.inputLabel}>NOTIFICATION PREFERENCES</Text>
 
-          {/* Quick presets */}
-          <View style={styles.presetRow}>
-            <TouchableOpacity
-              style={[styles.presetBtn, styles.presetCloudBtn]}
-              onPress={() => setInputUrl(CLOUD_SERVER_URL)}
-            >
-              <Ionicons name="cloud" size={12} color={THEME.colors.primary} />
-              <Text style={[styles.presetText, { color: THEME.colors.primary }]}>☁️ Render Cloud (24/7)</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.presetBtn}
-              onPress={() => setInputUrl('http://10.0.2.2:5000')}
-            >
-              <Text style={styles.presetText}>Android Local</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Alert Preferences */}
-          <View style={styles.divider} />
-          <Text style={styles.inputLabel}>NOTIFICATION PREFERENCES</Text>
-
-          <View style={styles.switchRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.switchTitle}>Audio Trading Alerts</Text>
-              <Text style={styles.switchSubtitle}>Play chime sound on Bullish/Bearish signal triggers</Text>
+            <View style={styles.switchRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.switchTitle}>Audio Trading Alerts</Text>
+                <Text style={styles.switchSubtitle}>Play chime sound on signal triggers</Text>
+              </View>
+              <Switch
+                value={soundEnabled}
+                onValueChange={toggleSound}
+                trackColor={{ false: THEME.colors.border, true: THEME.colors.primary }}
+              />
             </View>
-            <Switch
-              value={soundEnabled}
-              onValueChange={toggleSound}
-              trackColor={{ false: THEME.colors.border, true: THEME.colors.primary }}
-            />
-          </View>
 
-          <View style={styles.switchRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.switchTitle}>Haptic Vibration</Text>
-              <Text style={styles.switchSubtitle}>Vibrate phone on trade gate change</Text>
+            <View style={styles.switchRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.switchTitle}>Haptic Vibration</Text>
+                <Text style={styles.switchSubtitle}>Vibrate phone on trade gate change</Text>
+              </View>
+              <Switch
+                value={hapticEnabled}
+                onValueChange={toggleHaptic}
+                trackColor={{ false: THEME.colors.border, true: THEME.colors.primary }}
+              />
             </View>
-            <Switch
-              value={hapticEnabled}
-              onValueChange={toggleHaptic}
-              trackColor={{ false: THEME.colors.border, true: THEME.colors.primary }}
-            />
-          </View>
 
-          <TouchableOpacity style={styles.soundTestBtn} onPress={() => soundManager.testSound()}>
-            <Ionicons name="volume-high" size={16} color={THEME.colors.primary} />
-            <Text style={styles.soundTestText}>Test Audio Alert</Text>
-          </TouchableOpacity>
-
-          {/* Bottom Actions */}
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-              <Text style={styles.saveBtnText}>Save & Reconnect</Text>
+            <TouchableOpacity style={styles.soundTestBtn} onPress={() => soundManager.testSound()}>
+              <Ionicons name="volume-high" size={16} color={THEME.colors.primary} />
+              <Text style={styles.soundTestText}>Test Audio Alert</Text>
             </TouchableOpacity>
-          </View>
 
-          {/* User info & Logout */}
-          <View style={styles.logoutRow}>
-            <Text style={styles.userText}>Logged in as: {currentUser}</Text>
-            <TouchableOpacity onPress={logout} style={styles.logoutBtn}>
-              <Ionicons name="log-out-outline" size={14} color={THEME.colors.bearish} />
-              <Text style={styles.logoutText}>Logout</Text>
-            </TouchableOpacity>
-          </View>
+            {/* Save & Reconnect */}
+            <View style={styles.actions}>
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+                <Text style={styles.saveBtnText}>Save & Reconnect</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* User info & Logout */}
+            <View style={styles.logoutRow}>
+              <Text style={styles.userText}>Logged in as: {currentUser}</Text>
+              <TouchableOpacity onPress={logout} style={styles.logoutBtn}>
+                <Ionicons name="log-out-outline" size={14} color={THEME.colors.bearish} />
+                <Text style={styles.logoutText}>Logout</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -194,7 +306,7 @@ const styles = StyleSheet.create({
     padding: 20,
     borderTopWidth: 1,
     borderTopColor: THEME.colors.border,
-    maxHeight: '90%',
+    maxHeight: '92%',
   },
   header: {
     flexDirection: 'row',
@@ -205,50 +317,70 @@ const styles = StyleSheet.create({
   title: {
     color: THEME.colors.textPrimary,
     fontSize: 16,
-    fontWeight: '900',
+    fontWeight: '800',
   },
   closeBtn: {
     padding: 4,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
   inputLabel: {
-    color: THEME.colors.textSecondary,
+    color: THEME.colors.textMuted,
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5,
+    marginBottom: 4,
   },
   inputHelp: {
-    color: THEME.colors.textMuted,
+    color: THEME.colors.textSecondary,
     fontSize: 11,
-    marginTop: 2,
     marginBottom: 8,
   },
+  tokenBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  tokenActive: {
+    backgroundColor: 'rgba(34, 197, 94, 0.2)',
+  },
+  tokenExpired: {
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+  },
+  tokenBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+  },
   textInput: {
-    backgroundColor: THEME.colors.bgDark,
-    borderRadius: 10,
+    backgroundColor: '#071a26',
     borderWidth: 1,
     borderColor: THEME.colors.border,
-    color: THEME.colors.textPrimary,
+    borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 14,
-    fontWeight: '600',
+    color: THEME.colors.textPrimary,
+    fontSize: 13,
+    marginBottom: 8,
   },
   testRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginTop: 10,
+    marginBottom: 10,
   },
   testBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: THEME.colors.bgCardElevated,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
     gap: 6,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    backgroundColor: THEME.colors.primaryDark,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
   testBtnText: {
     color: '#fff',
@@ -256,8 +388,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   resultText: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '600',
     flex: 1,
   },
   successText: {
@@ -269,38 +401,55 @@ const styles = StyleSheet.create({
   presetRow: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 10,
+    marginBottom: 12,
   },
   presetBtn: {
-    backgroundColor: THEME.colors.bgCard,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
+    backgroundColor: '#071a26',
+    borderWidth: 1,
+    borderColor: THEME.colors.border,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
   presetCloudBtn: {
     borderColor: THEME.colors.primary,
-    backgroundColor: '#0a304a',
+    backgroundColor: 'rgba(56, 189, 248, 0.1)',
   },
   presetText: {
-    color: THEME.colors.primaryLight,
+    color: THEME.colors.textSecondary,
     fontSize: 11,
     fontWeight: '700',
   },
+  totpBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: THEME.colors.primary,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  totpBtnText: {
+    color: '#071a26',
+    fontSize: 13,
+    fontWeight: '900',
+  },
   divider: {
     height: 1,
-    backgroundColor: THEME.colors.borderLight,
-    marginVertical: 14,
+    backgroundColor: THEME.colors.border,
+    marginVertical: 12,
   },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 10,
+    paddingVertical: 6,
   },
   switchTitle: {
     color: THEME.colors.textPrimary,
@@ -310,30 +459,32 @@ const styles = StyleSheet.create({
   switchSubtitle: {
     color: THEME.colors.textMuted,
     fontSize: 11,
+    marginTop: 2,
   },
   soundTestBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    backgroundColor: THEME.colors.bgCard,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    backgroundColor: '#071a26',
+    borderWidth: 1,
+    borderColor: THEME.colors.border,
+    paddingVertical: 8,
     borderRadius: 8,
+    marginTop: 8,
   },
   soundTestText: {
     color: THEME.colors.primary,
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
   },
   actions: {
-    marginTop: 18,
+    marginTop: 16,
   },
   saveBtn: {
     backgroundColor: THEME.colors.primary,
-    borderRadius: 12,
     paddingVertical: 12,
+    borderRadius: 10,
     alignItems: 'center',
   },
   saveBtnText: {
@@ -348,7 +499,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: THEME.colors.borderLight,
+    borderTopColor: THEME.colors.border,
   },
   userText: {
     color: THEME.colors.textMuted,
@@ -358,10 +509,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    padding: 6,
   },
   logoutText: {
     color: THEME.colors.bearish,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '700',
   },
 });

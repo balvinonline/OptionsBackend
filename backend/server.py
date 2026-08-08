@@ -243,11 +243,18 @@ def get_fyers_env_status():
     client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
     secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
     access_token = os.getenv("FYERS_ACCESS_TOKEN", "").strip()
+    fyers_id = os.getenv("FYERS_ID", "").strip()
+    fyers_pin = os.getenv("FYERS_PIN", "").strip()
+    totp_key = os.getenv("FYERS_TOTP_KEY", "").strip()
     cooldown_seconds = max(0, int(_QUOTE_COOLDOWN_UNTIL - time.time()))
     return {
         "clientIdPresent": bool(client_id),
         "secretKeyPresent": bool(secret_key),
         "accessTokenPresent": bool(access_token),
+        "fyersIdPresent": bool(fyers_id),
+        "fyersPinPresent": bool(fyers_pin),
+        "totpKeyPresent": bool(totp_key),
+        "totpConfigured": bool(client_id and secret_key and fyers_id and fyers_pin and totp_key),
         "fyersInitialized": fyers is not None,
         "envUpdatedAt": datetime.fromtimestamp(env_mtime).strftime("%d-%m-%Y %H:%M:%S") if env_mtime else "",
         "rateLimited": cooldown_seconds > 0,
@@ -6747,6 +6754,76 @@ def fyers_save_token():
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 200
+
+
+@app.route("/api/fyers/totp-login", methods=["POST", "GET"])
+def fyers_totp_login():
+    global _QUOTE_COOLDOWN_UNTIL
+    refresh_fyers_from_env()
+    payload = request.get_json(silent=True) or {}
+    
+    client_id = (payload.get("clientId") or os.getenv("FYERS_CLIENT_ID", "")).strip()
+    secret_key = (payload.get("secretKey") or os.getenv("FYERS_SECRET_KEY", "")).strip()
+    fyers_id = (payload.get("fyersId") or os.getenv("FYERS_ID", "")).strip()
+    fyers_pin = (payload.get("fyersPin") or os.getenv("FYERS_PIN", "")).strip()
+    totp_key = (payload.get("totpKey") or os.getenv("FYERS_TOTP_KEY", "")).strip()
+
+    if not client_id or not secret_key:
+        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY."}), 200
+    if not fyers_id or not fyers_pin or not totp_key:
+        return jsonify({
+            "ok": False,
+            "error": "Missing TOTP credentials (FYERS_ID, FYERS_PIN, or FYERS_TOTP_KEY). Please provide them.",
+            **get_fyers_env_status(),
+        }), 200
+
+    try:
+        from totp_login import generate_fyers_token_via_totp
+        access_token = generate_fyers_token_via_totp(
+            fyers_id=fyers_id,
+            fyers_pin=fyers_pin,
+            totp_key=totp_key,
+            client_id=client_id,
+            secret_key=secret_key
+        )
+        if not access_token:
+            return jsonify({"ok": False, "error": "Automated TOTP login failed to produce an access token."}), 200
+
+        save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
+        if payload.get("fyersId"): save_env_value(ENV_PATH, "FYERS_ID", fyers_id)
+        if payload.get("fyersPin"): save_env_value(ENV_PATH, "FYERS_PIN", fyers_pin)
+        if payload.get("totpKey"): save_env_value(ENV_PATH, "FYERS_TOTP_KEY", totp_key)
+
+        _QUOTE_COOLDOWN_UNTIL = 0.0
+        refresh_fyers_from_env(force=True)
+        clear_live_market_caches()
+
+        return jsonify({
+            "ok": True,
+            "message": "TOTP Login successful! Access token generated and active.",
+            **get_fyers_env_status(),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"TOTP Login Error: {str(e)}"}), 200
+
+
+@app.route("/api/fyers/save-totp-credentials", methods=["POST"])
+def fyers_save_totp_credentials():
+    payload = request.get_json(silent=True) or {}
+    fyers_id = payload.get("fyersId", "").strip()
+    fyers_pin = payload.get("fyersPin", "").strip()
+    totp_key = payload.get("totpKey", "").strip()
+
+    if fyers_id: save_env_value(ENV_PATH, "FYERS_ID", fyers_id)
+    if fyers_pin: save_env_value(ENV_PATH, "FYERS_PIN", fyers_pin)
+    if totp_key: save_env_value(ENV_PATH, "FYERS_TOTP_KEY", totp_key)
+
+    refresh_fyers_from_env()
+    return jsonify({
+        "ok": True,
+        "message": "TOTP credentials saved to server configuration.",
+        **get_fyers_env_status(),
+    })
 
 
 @app.route("/api/fyers/history")

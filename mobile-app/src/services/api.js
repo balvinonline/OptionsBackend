@@ -110,5 +110,15 @@ export const api = {
   getMarketNews: async () => {
     const res = await apiClient.get('/api/market-news');
     return res.data;
-  }
+  },
+
+  totpLogin: async (credentials = {}) => {
+    const res = await apiClient.post('/api/fyers/totp-login', credentials);
+    return res.data;
+  },
+
+  saveTotpCredentials: async (credentials) => {
+    const res = await apiClient.post('/api/fyers/save-totp-credentials', credentials);
+    return res.data;
+  },
 };

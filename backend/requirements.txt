@@ -4,3 +4,4 @@ python-dotenv
 requests
 gunicorn
 fyers-apiv3
+pyotp
