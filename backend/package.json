@@ -1,0 +1,8 @@
+{
+  "name": "options-desk-backend",
+  "private": true,
+  "scripts": {
+    "dev": "python -u server.py",
+    "start": "python -u server.py"
+  }
+}
