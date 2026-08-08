@@ -3,7 +3,7 @@ import { StyleSheet, Text, TextInput, TouchableOpacity, View, Modal, ActivityInd
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { getStoredSettings, setStoredSetting } from '../services/storage';
+import { getStoredSettings, setStoredSetting, CLOUD_SERVER_URL } from '../services/storage';
 import { soundManager } from './AudioAlertHelper';
 import { THEME } from '../constants/theme';
 
@@ -72,15 +72,15 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
           </View>
 
           {/* Backend URL Input */}
-          <Text style={styles.inputLabel}>FLASK BACKEND SERVER URL</Text>
+          <Text style={styles.inputLabel}>LIVE BACKEND SERVER URL</Text>
           <Text style={styles.inputHelp}>
-            Enter your PC IP address (e.g. http://192.168.1.5:5000) or localhost
+            24/7 Cloud URL or local PC address
           </Text>
           <TextInput
             style={styles.textInput}
             value={inputUrl}
             onChangeText={setInputUrl}
-            placeholder="http://192.168.1.100:5000"
+            placeholder={CLOUD_SERVER_URL}
             placeholderTextColor={THEME.colors.textDisabled}
             autoCapitalize="none"
             autoCorrect={false}
@@ -113,16 +113,17 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
           {/* Quick presets */}
           <View style={styles.presetRow}>
             <TouchableOpacity
-              style={styles.presetBtn}
-              onPress={() => setInputUrl('http://localhost:5000')}
+              style={[styles.presetBtn, styles.presetCloudBtn]}
+              onPress={() => setInputUrl(CLOUD_SERVER_URL)}
             >
-              <Text style={styles.presetText}>localhost:5000</Text>
+              <Ionicons name="cloud" size={12} color={THEME.colors.primary} />
+              <Text style={[styles.presetText, { color: THEME.colors.primary }]}>☁️ Render Cloud (24/7)</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.presetBtn}
               onPress={() => setInputUrl('http://10.0.2.2:5000')}
             >
-              <Text style={styles.presetText}>Android (10.0.2.2)</Text>
+              <Text style={styles.presetText}>Android Local</Text>
             </TouchableOpacity>
           </View>
 
@@ -277,6 +278,13 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: THEME.colors.borderLight,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  presetCloudBtn: {
+    borderColor: THEME.colors.primary,
+    backgroundColor: '#0a304a',
   },
   presetText: {
     color: THEME.colors.primaryLight,

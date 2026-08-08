@@ -10,27 +10,11 @@ const KEYS = {
   HAPTIC_ENABLED: 'OPTION_DESK_HAPTIC_ENABLED',
 };
 
-// Default server URL - automatically picks up the PC IP from Expo's Metro bundler host
-export const getDefaultServerUrl = () => {
-  try {
-    const hostUri =
-      Constants.expoConfig?.hostUri ||
-      Constants.manifest2?.extra?.expoClient?.hostUri ||
-      Constants.manifest?.debuggerHost;
-    if (hostUri) {
-      const ip = hostUri.split(':')[0];
-      if (ip && ip !== 'localhost' && ip !== '127.0.0.1') {
-        return `http://${ip}:5000`;
-      }
-    }
-  } catch (e) {
-    // Ignore fallback
-  }
+export const CLOUD_SERVER_URL = 'https://optionsbackend.onrender.com';
 
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:5000';
-  }
-  return 'http://localhost:5000';
+// Default server URL - defaults to your 24/7 Render Cloud Server
+export const getDefaultServerUrl = () => {
+  return CLOUD_SERVER_URL;
 };
 
 export const getStoredServerUrl = async () => {
