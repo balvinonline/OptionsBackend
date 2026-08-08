@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SUPPORTED_INDEXES, useMarket } from '../context/MarketContext';
+import { MarketTape } from './MarketTape';
 import { THEME } from '../constants/theme';
 
 export const IndexHeader = ({ onOpenSettings }) => {
@@ -38,6 +39,9 @@ export const IndexHeader = ({ onOpenSettings }) => {
         </View>
       </View>
 
+      {/* Market Tape Spot Tickers (NIFTY 50, NIFTY BANK, SENSEX, SMALLCAP, FIN SERVICE, MIDCAP) */}
+      <MarketTape />
+
       {/* Index Selector Pills */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsContainer}>
         {SUPPORTED_INDEXES.map((idx) => {
@@ -65,13 +69,13 @@ const styles = StyleSheet.create({
     borderBottomColor: THEME.colors.borderLight,
     paddingTop: 8,
     paddingBottom: 10,
-    paddingHorizontal: 14,
   },
   topRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 6,
+    paddingHorizontal: 14,
   },
   branding: {
     flexDirection: 'row',
@@ -119,7 +123,8 @@ const styles = StyleSheet.create({
   },
   pillsContainer: {
     gap: 8,
-    paddingRight: 10,
+    paddingHorizontal: 14,
+    marginTop: 4,
   },
   pill: {
     paddingHorizontal: 14,

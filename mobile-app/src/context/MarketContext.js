@@ -377,24 +377,32 @@ export const MarketProvider = ({ children }) => {
   // Fetch market overview strip, news, sectors & heavyweights
   const fetchMarketAux = async () => {
     try {
-      const [strip, news, sectors, scans] = await Promise.allSettled([
+      const [strip, homeDash, news, sectors, scans] = await Promise.allSettled([
         api.getMarketStrip(),
+        api.getHomeDashboard(),
         api.getMarketNews(),
         api.getSectorStocks(),
         api.getStockOptionsScan(),
       ]);
 
-      if (strip.status === 'fulfilled' && Array.isArray(strip.value)) {
-        setMarketStrip(strip.value);
+      if (strip.status === 'fulfilled' && strip.value) {
+        const items = Array.isArray(strip.value) ? strip.value : (strip.value.items || []);
+        if (items.length > 0) setMarketStrip(items);
+      } else if (homeDash.status === 'fulfilled' && homeDash.value?.marketStrip) {
+        setMarketStrip(homeDash.value.marketStrip);
       }
-      if (news.status === 'fulfilled' && Array.isArray(news.value)) {
-        setMarketNews(news.value);
+
+      if (news.status === 'fulfilled' && news.value) {
+        const newsItems = Array.isArray(news.value) ? news.value : (news.value.items || []);
+        setMarketNews(newsItems);
       }
-      if (sectors.status === 'fulfilled' && Array.isArray(sectors.value)) {
-        setSectorStocks(sectors.value);
+      if (sectors.status === 'fulfilled' && sectors.value) {
+        const secRows = Array.isArray(sectors.value) ? sectors.value : (sectors.value.rows || []);
+        setSectorStocks(secRows);
       }
-      if (scans.status === 'fulfilled' && Array.isArray(scans.value)) {
-        setHeavyweights(scans.value);
+      if (scans.status === 'fulfilled' && scans.value) {
+        const scanRows = Array.isArray(scans.value) ? scans.value : (scans.value.rows || []);
+        setHeavyweights(scanRows);
       }
     } catch {
       // silent
