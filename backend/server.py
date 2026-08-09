@@ -63,6 +63,22 @@ def index():
 DB_PATH = Path(__file__).resolve().parent / "app.db"
 ACTIVE_TOKENS = {}
 
+# Auto-initialize database on startup
+def setup_database():
+    import sqlite3
+    import werkzeug.security
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL)")
+    cursor.execute("SELECT id FROM users WHERE username = 'admin'")
+    if not cursor.fetchone():
+        hashed_pw = werkzeug.security.generate_password_hash('admin')
+        cursor.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", ('admin', hashed_pw))
+    conn.commit()
+    conn.close()
+
+setup_database()
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.json or {}
