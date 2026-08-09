@@ -13146,6 +13146,7 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
       }}
     >
       <div className={`pro-dashboard ${surfaceClass} ${focusMode ? "focus-mode" : ""}`}>
+        <ServerSettingsModal visible={settingsModalVisible} onClose={() => setSettingsModalVisible(false)} />
         <div className={`pro-shell ${sidebarVisible ? "" : "sidebar-hidden"}`}>
           {sidebarVisible ? (
           <aside className="dashboard-sidebar">
