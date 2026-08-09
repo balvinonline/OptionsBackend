@@ -1,3 +1,4 @@
+import ServerSettingsModal from "./components/ServerSettingsModal";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import "antd/dist/reset.css";
@@ -12061,6 +12062,7 @@ function TradeMonitorPage({
 }
 
 export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" }) {
+  const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [themeMode, setThemeMode] = useState(() => {
     const saved = localStorage.getItem("pro-dashboard-theme") || "light";
     return saved === "dark" ? "black" : saved;
