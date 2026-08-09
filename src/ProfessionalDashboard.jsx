@@ -13242,6 +13242,7 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
               <Tooltip title="Show or hide sidebar">
                 <Switch checked={sidebarVisible} onChange={setSidebarVisible} checkedChildren="Menu" unCheckedChildren="Hide" />
               </Tooltip>
+              <Button icon={<SettingOutlined />} onClick={() => setSettingsModalVisible(true)}>Settings</Button>
               <Button icon={<ReloadOutlined spin={refreshing} />} onClick={manualRefresh}>
                 Refresh
               </Button>

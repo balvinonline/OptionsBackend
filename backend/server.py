@@ -42,8 +42,23 @@ except Exception:
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-app = Flask(__name__)
+dist_folder = Path(__file__).resolve().parent.parent / "dist"
+app = Flask(__name__, static_folder=str(dist_folder), static_url_path='/')
 CORS(app)
+
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "Not found"}), 404
+    if dist_folder.exists():
+        return app.send_static_file('index.html')
+    return "Frontend not built yet", 404
+
+@app.route('/')
+def index():
+    if dist_folder.exists():
+        return app.send_static_file('index.html')
+    return "Frontend not built yet. Run 'npm run build' in root directory.", 404
 
 DB_PATH = Path(__file__).resolve().parent / "app.db"
 ACTIVE_TOKENS = {}
