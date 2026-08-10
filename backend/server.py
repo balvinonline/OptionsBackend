@@ -6794,6 +6794,7 @@ def fyers_save_token():
         return jsonify({
             "ok": True,
             "message": "Fyers token saved. Live caches cleared; click Refresh once.",
+            "access_token": access_token,
             **get_fyers_env_status(),
         })
     except Exception as e:
