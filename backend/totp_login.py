@@ -43,7 +43,7 @@ def generate_fyers_token_via_totp(fyers_id, fyers_pin, totp_key, client_id, secr
     Automated Fyers V3 login using TOTP (2FA) and 4-digit PIN.
     Returns the new access_token string.
     """
-    fyers_id = str(fyers_id or "").strip()
+    fyers_id = str(fyers_id or "").strip().upper()
     fyers_pin = str(fyers_pin or "").strip()
     totp_key = str(totp_key or "").replace(" ", "").strip()
     client_id = str(client_id or "").strip()
