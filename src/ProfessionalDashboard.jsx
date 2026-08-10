@@ -1,6 +1,6 @@
 import ServerSettingsModal from "./components/ServerSettingsModal";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import "antd/dist/reset.css";
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, createChart, createSeriesMarkers } from "lightweight-charts";
 import { calculateVWAP, calculateEMA, calculateSupportResistance, calculateSignals } from "./utils/indicators";
@@ -12071,6 +12071,9 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
   const [sidebarVisible, setSidebarVisible] = useState(() => localStorage.getItem("pro-dashboard-sidebar") !== "hidden");
   
   const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const isEmbed = searchParams.get('embed') === 'true';
+
   const navigate = useNavigate();
 
   const view = useMemo(() => {
@@ -13149,7 +13152,7 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
       <div className={`pro-dashboard ${surfaceClass} ${focusMode ? "focus-mode" : ""}`}>
         <ServerSettingsModal visible={settingsModalVisible} onClose={() => setSettingsModalVisible(false)} />
         <div className={`pro-shell ${sidebarVisible ? "" : "sidebar-hidden"}`}>
-          {sidebarVisible ? (
+          {sidebarVisible && !isEmbed ? (
           <aside className="dashboard-sidebar">
             <div className="sidebar-brand">
               <DashboardLogo />
@@ -13184,16 +13187,18 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
           ) : null}
 
           <main className="dashboard-main">
-          <div className="mobile-page-bar">
-            <Button
-              size="small"
-              icon={<MenuOutlined />}
-              onClick={() => setSidebarVisible((prev) => !prev)}
-            >
-              {sidebarVisible ? "Hide Menu" : "Menu"}
-            </Button>
-            <b>{currentPageLabel}</b>
-          </div>
+          {!isEmbed && (
+            <div className="mobile-page-bar">
+              <Button
+                size="small"
+                icon={<MenuOutlined />}
+                onClick={() => setSidebarVisible((prev) => !prev)}
+              >
+                {sidebarVisible ? "Hide Menu" : "Menu"}
+              </Button>
+              <b>{currentPageLabel}</b>
+            </div>
+          )}
           {view === "home" ? (
           <div className="dashboard-topbar">
             <div className="dashboard-title-block">
