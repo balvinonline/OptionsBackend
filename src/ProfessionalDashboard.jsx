@@ -42,6 +42,7 @@ import {
   MenuOutlined,
   ReloadOutlined,
   ThunderboltOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import "./ProfessionalDashboard.css";
 import dashboardLogoSrc from "./assets/dashboard logo.png";
