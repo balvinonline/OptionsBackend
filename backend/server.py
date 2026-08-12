@@ -6798,7 +6798,7 @@ def fyers_save_token():
         if not access_token:
             return jsonify({
                 "ok": False,
-                "error": "Fyers did not return an access_token.",
+                "error": f"Fyers did not return an access_token. Reason: {resp.get('message', resp)}",
                 "response": resp,
             }), 200
 
