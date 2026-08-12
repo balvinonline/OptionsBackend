@@ -258,9 +258,13 @@ def extract_fyers_auth_code(value):
     if not text:
         return ""
 
-    match = re.search(r"(?:auth_code|code)=([^&\s]+)", text)
-    if match:
-        return match.group(1).strip()
+    match_auth = re.search(r"auth_code=([^&\s]+)", text)
+    if match_auth:
+        return match_auth.group(1).strip()
+        
+    match_code = re.search(r"[?&]code=([^&\s]+)", text)
+    if match_code:
+        return match_code.group(1).strip()
 
     return text
 
