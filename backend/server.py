@@ -6784,6 +6784,12 @@ def fyers_save_token():
         })
 
     auth_code = extract_fyers_auth_code(payload.get("authCode") or payload.get("finalUrl"))
+
+    # DEBUG LOGGING FOR AUTH CODE
+    with open("auth_code_debug.log", "a") as f:
+        f.write(f"[{datetime.now()}] Payload: {payload}\n")
+        f.write(f"[{datetime.now()}] Extracted Auth Code: {auth_code}\n")
+
     if not fyersModel:
         return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
     if not client_id or not secret_key:
