@@ -592,11 +592,11 @@ def clear_live_market_caches():
 INDEX_MAP = {
     "NIFTY": {
         "spot": "NSE:NIFTY50-INDEX",
-        "future": "NSE:NIFTY26JUNFUT",
+        "future": "NSE:NIFTY26AUGFUT",
         "label": "NIFTY 50",
         "option_symbols": [
             "NSE:NIFTY50-INDEX",
-            "NSE:NIFTY26JUNFUT",
+            "NSE:NIFTY26AUGFUT",
             "NSE:NIFTY-INDEX",
             "NSE:NIFTY",
         ],
@@ -622,11 +622,11 @@ INDEX_MAP = {
     },
     "BANKNIFTY": {
         "spot": "NSE:NIFTYBANK-INDEX",
-        "future": "NSE:BANKNIFTY26JUNFUT",
+        "future": "NSE:BANKNIFTY26AUGFUT",
         "label": "BANK NIFTY",
         "option_symbols": [
             "NSE:NIFTYBANK-INDEX",
-            "NSE:BANKNIFTY26JUNFUT",
+            "NSE:BANKNIFTY26AUGFUT",
             "NSE:BANKNIFTY-INDEX",
             "NSE:BANKNIFTY",
         ],
@@ -639,11 +639,11 @@ INDEX_MAP = {
     },
     "SENSEX": {
         "spot": "BSE:SENSEX-INDEX",
-        "future": "BSE:SENSEX26JUNFUT",
+        "future": "BSE:SENSEX26AUGFUT",
         "label": "SENSEX",
         "option_symbols": [
             "BSE:SENSEX-INDEX",
-            "BSE:SENSEX26JUNFUT",
+            "BSE:SENSEX26AUGFUT",
             "BSE:SENSEX",
             "SENSEX",
         ],
@@ -1996,6 +1996,8 @@ def _extract_option_rows_from_data(data):
     return []
 
 
+_SUCCESSFUL_OC_SYMBOLS = {}
+
 def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12):
     refresh_fyers_from_env()
     if not fyers:
@@ -2015,6 +2017,13 @@ def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12
             candidates.append(str(fallback_symbol).strip())
 
     candidates = unique_symbols(candidates)
+    
+    first_candidate = candidates[0] if candidates else "UNKNOWN"
+    if first_candidate in _SUCCESSFUL_OC_SYMBOLS:
+        successful_sym = _SUCCESSFUL_OC_SYMBOLS[first_candidate]
+        if successful_sym in candidates:
+            candidates.remove(successful_sym)
+            candidates.insert(0, successful_sym)
 
     for sym in candidates:
         try:
@@ -2030,6 +2039,8 @@ def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12
             )
 
             if resp and rows:
+                if first_candidate != "UNKNOWN":
+                    _SUCCESSFUL_OC_SYMBOLS[first_candidate] = sym
                 return resp
 
         except Exception as e:
@@ -3007,7 +3018,7 @@ def infer_spot_from_option_chain(rows):
     return round2((values[mid - 1] + values[mid]) / 2)
 
 
-def get_option_chain_rows_for_index(symbol_key, spot_price, cache_ttl=8, strikecount=60):
+def get_option_chain_rows_for_index(symbol_key, spot_price, cache_ttl=8, strikecount=30):
     cache_spot = round(safe_float(spot_price, 0) or 0)
     cache_key = f"{symbol_key}:{cache_spot}:{int(strikecount or 12)}"
 
@@ -3068,10 +3079,14 @@ def build_dashboard(symbol_key, cache_ttl=10):
         return cached
 
     cfg = INDEX_MAP[symbol_key]
+    
+    symbols_to_stream = [sym for sym in [cfg.get("spot"), cfg.get("future"), VIX_SYMBOL] if sym]
+    ensure_fyers_ws_stream(symbols_to_stream)
 
-    spot_raw = get_quote_block(cfg["spot"])
-    future_raw = get_quote_block(cfg["future"])
-    vix_raw = get_quote_block(VIX_SYMBOL)
+    q_map = get_quotes_map(symbols_to_stream)
+    spot_raw = q_map.get(cfg["spot"]) or q_map.get(normalize_symbol_key(cfg["spot"])) or {}
+    future_raw = q_map.get(cfg["future"]) or q_map.get(normalize_symbol_key(cfg["future"])) or {}
+    vix_raw = q_map.get(VIX_SYMBOL) or q_map.get(normalize_symbol_key(VIX_SYMBOL)) or {}
 
     if DEBUG_LOGS:
         print(f"{symbol_key} spot_raw:", spot_raw)
