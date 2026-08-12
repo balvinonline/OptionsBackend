@@ -6677,6 +6677,15 @@ def debug_fyers_quote():
         }), 200
 
 
+@app.route("/api/debug/authlog")
+def api_debug_authlog():
+    try:
+        with open("auth_code_debug.log", "r") as f:
+            content = f.read()
+    except Exception as e:
+        content = str(e)
+    return "<pre>" + content + "</pre>"
+
 @app.route("/api/debug/runtime")
 def api_debug_runtime():
     test_quote_resp = {}
