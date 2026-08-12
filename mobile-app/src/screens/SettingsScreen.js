@@ -44,6 +44,7 @@ export const SettingsScreen = () => {
   const startWebViewLogin = async () => {
     try {
       setTotpLoading(true);
+      isProcessingRef.current = false;
       const resp = await fetch(`${serverUrl}/api/fyers/login-url`);
       const data = await resp.json();
       if (data.loginUrl) {
@@ -59,9 +60,13 @@ export const SettingsScreen = () => {
     }
   };
 
+  const isProcessingRef = React.useRef(false);
+
   const onWebViewNavigation = async (navState) => {
     const { url } = navState;
     if (url.includes('auth_code=') || url.includes('code=')) {
+      if (isProcessingRef.current) return;
+      isProcessingRef.current = true;
       setShowWebView(false);
       handleSubmitAuthCode(url);
     } else if (url.includes('error=')) {
