@@ -6825,7 +6825,7 @@ def fyers_totp_login():
     client_id = (payload.get("clientId") or os.getenv("FYERS_CLIENT_ID", "")).strip()
     secret_key = (payload.get("secretKey") or os.getenv("FYERS_SECRET_KEY", "")).strip()
     fyers_id = (payload.get("fyersId") or os.getenv("FYERS_ID", "")).strip()
-    fyers_pin = (payload.get("fyersPin") or os.getenv("FYERS_PIN", "")).strip()
+    fyers_pin = (payload.get("fyersPin") or payload.get("pin") or os.getenv("FYERS_PIN", "")).strip()
     totp_key = (payload.get("totpKey") or os.getenv("FYERS_TOTP_KEY", "")).strip()
 
     if not client_id or not secret_key:
@@ -6871,7 +6871,7 @@ def fyers_totp_login():
 def fyers_save_totp_credentials():
     payload = request.get_json(silent=True) or {}
     fyers_id = payload.get("fyersId", "").strip()
-    fyers_pin = payload.get("fyersPin", "").strip()
+    fyers_pin = (payload.get("fyersPin") or payload.get("pin") or "").strip()
     totp_key = payload.get("totpKey", "").strip()
 
     if fyers_id: save_env_value(ENV_PATH, "FYERS_ID", fyers_id)
