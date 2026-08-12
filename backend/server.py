@@ -6678,14 +6678,22 @@ def debug_fyers_quote():
 
 
 @app.route("/api/debug/runtime")
-def debug_runtime():
+def api_debug_runtime():
+    test_quote_resp = {}
+    if fyers:
+        try:
+            test_quote_resp = fyers.quotes({"symbols": "NSE:NIFTY50-INDEX"})
+        except Exception as e:
+            test_quote_resp = {"error_exc": str(e)}
+
     return jsonify({
         "ok": True,
-        "build": SERVER_BUILD_MARKER,
-        "file": str(Path(__file__).resolve()),
+        "fyersInitialized": fyers is not None,
+        "build": "option-dashboard-fo-breadth-20260531-1200",
         "cwd": os.getcwd(),
-        "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
-        **get_fyers_env_status(),
+        "file": __file__,
+        "testQuote": test_quote_resp,
+        **get_fyers_env_status()
     })
 
 
