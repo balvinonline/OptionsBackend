@@ -24,12 +24,12 @@ export const Sidebar = ({ isOpen, onClose, onNavigate, activeTab, onNavigateWebF
   if (!isOpen && slideAnim._value === -SIDEBAR_WIDTH) return null;
 
   const MENU_ITEMS = [
+    { id: 'Dashboard', title: 'Market Overview', icon: 'home' },
     { id: 'Signals', title: 'Live Signals', icon: 'flash' },
     { id: 'TradeGate', title: 'Trade Gate Rules', icon: 'shield-checkmark' },
     { id: 'Chain', title: 'Option Chain & OI', icon: 'layers' },
     { id: 'Scanner', title: 'F&O Watchlist', icon: 'trending-up' },
     { id: 'Chart', title: 'Live Chart', icon: 'stats-chart' },
-    { id: 'Dashboard', title: 'Market Overview', icon: 'home' },
     { id: 'StockOptions', title: 'Stock Options Desk', icon: 'briefcase' },
     { id: 'OptionBuyer', title: 'Option Buyer Hub', icon: 'rocket' },
   ];

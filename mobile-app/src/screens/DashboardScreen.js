@@ -48,6 +48,20 @@ export const DashboardScreen = ({ onNavigate }) => {
           />
         }
       >
+        {/* Market Trend Banner */}
+        {signalAnalysis?.gateStatus && (
+          <View style={[styles.trendBanner, signalAnalysis.gateStatus === 'BULLISH' ? styles.trendBullish : signalAnalysis.gateStatus === 'BEARISH' ? styles.trendBearish : styles.trendNeutral]}>
+            <Ionicons 
+              name={signalAnalysis.gateStatus === 'BULLISH' ? 'trending-up' : signalAnalysis.gateStatus === 'BEARISH' ? 'trending-down' : 'swap-horizontal'} 
+              size={24} 
+              color="#fff" 
+            />
+            <Text style={styles.trendBannerText}>
+              MARKET TREND: {signalAnalysis.gateStatus === 'BULLISH' ? 'BULLISH 🚀' : signalAnalysis.gateStatus === 'BEARISH' ? 'BEARISH 🩸' : 'SIDEWAYS ⚖️'}
+            </Text>
+          </View>
+        )}
+
         {/* KPI Spotlight */}
         <KpiCard data={marketData} atm={atm} />
 
@@ -271,5 +285,37 @@ const getStyles = (theme) => StyleSheet.create({
     color: theme.colors.primary,
     fontSize: 12,
     fontWeight: '800',
+  },
+  fullChartText: {
+    color: theme.colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  trendBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginHorizontal: 14,
+    marginTop: 14,
+    marginBottom: 4,
+    borderRadius: 8,
+    gap: 8,
+  },
+  trendBullish: {
+    backgroundColor: theme.colors.bullish,
+  },
+  trendBearish: {
+    backgroundColor: theme.colors.bearish,
+  },
+  trendNeutral: {
+    backgroundColor: theme.colors.warning,
+  },
+  trendBannerText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 1,
   },
 });

@@ -45,25 +45,21 @@ export const StockDeskScreen = ({ symbol, onBack }) => {
     return () => clearInterval(intervalId);
   }, [fetchDetail]);
 
-  const atm = detail?.spot ? detail.spot : 0;
+  const atmLtp = detail?.spot?.ltp ? Number(detail.spot.ltp) : 0;
   
   // Trim chainRows to ATM +/- 5 strikes
   let chainRows = detail?.optionChain || [];
-  let maxOi = 0;
-  if (chainRows.length > 0 && atm > 0) {
+  let atmStrike = 0;
+  if (chainRows.length > 0 && atmLtp > 0) {
     let closestIdx = 0;
     let minDiff = Infinity;
     chainRows.forEach((row, idx) => {
-      const diff = Math.abs(row.strike - atm);
+      const diff = Math.abs(row.strike - atmLtp);
       if (diff < minDiff) {
         minDiff = diff;
         closestIdx = idx;
+        atmStrike = row.strike;
       }
-      
-      const cOi = Number(row.ce_oi || row.oi_CE || 0);
-      const pOi = Number(row.pe_oi || row.oi_PE || 0);
-      if (cOi > maxOi) maxOi = cOi;
-      if (pOi > maxOi) maxOi = pOi;
     });
     const startIdx = Math.max(0, closestIdx - 5);
     const endIdx = Math.min(chainRows.length, closestIdx + 6);
@@ -171,20 +167,24 @@ export const StockDeskScreen = ({ symbol, onBack }) => {
                 const ceGreek = { delta: row.ce_delta || 0, theta: row.ce_theta || 0, gamma: row.ce_gamma || 0 };
                 const peGreek = { delta: row.pe_delta || 0, theta: row.pe_theta || 0, gamma: row.pe_gamma || 0 };
                 
-                const maxPainValue = detail?.analytics?.maxPain || detail?.max_pain || atm;
+                const maxPainValue = detail?.analytics?.maxPain || detail?.max_pain;
                 const isMaxPain = row.strike === maxPainValue;
+                const isAtm = row.strike === atmStrike;
                 const isCeHighVolume = row.ce_volume > (row.ce_oi * 2) && row.ce_volume > 50000;
                 const isPeHighVolume = row.pe_volume > (row.pe_oi * 2) && row.pe_volume > 50000;
                 
                 return (
-                  <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow]}>
+                  <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow, isAtm && styles.atmRow]}>
                     <View style={styles.chainColSignal}>
                       <Text style={[styles.chainCol, { color: theme.colors.bullish }]}>{row.ce_ltp?.toFixed(2) || '-'} {isCeHighVolume ? '⚡' : ''}</Text>
                       <Text style={styles.greekText}>Δ: {ceGreek.delta.toFixed(2)} | Θ: {ceGreek.theta.toFixed(2)} {ceGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
                       {ceSignal && <Text style={[styles.signalBadge, { backgroundColor: ceSignal.color }]}>{ceSignal.text}</Text>}
                     </View>
                     
-                    <Text style={styles.chainColStrike}>{row.strike}</Text>
+                    <View style={styles.chainColStrikeContainer}>
+                      <Text style={[styles.chainColStrike, isAtm && styles.atmStrikeText]}>{row.strike}</Text>
+                      {isAtm && <Text style={styles.atmBadge}>ATM</Text>}
+                    </View>
                     
                     <View style={styles.chainColSignal}>
                       <Text style={[styles.chainCol, { color: theme.colors.bearish }]}>{row.pe_ltp?.toFixed(2) || '-'} {isPeHighVolume ? '⚡' : ''}</Text>
@@ -401,6 +401,26 @@ const getStyles = (theme) => StyleSheet.create({
     borderBottomWidth: 2,
     borderColor: '#FFD700',
     backgroundColor: 'rgba(255, 215, 0, 0.05)',
+  },
+  atmRow: {
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: theme.colors.borderLight,
+  },
+  chainColStrikeContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  atmStrikeText: {
+    color: theme.colors.primary,
+  },
+  atmBadge: {
+    fontSize: 8,
+    color: theme.colors.primary,
+    fontWeight: 'bold',
+    marginTop: 2,
   },
   chainLabels: {
     flexDirection: 'row',

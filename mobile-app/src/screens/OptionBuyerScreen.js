@@ -83,18 +83,36 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
           const peGreek = liveGreeks[row.pe_symbol] || { delta: 0, theta: 0, gamma: 0 };
           const maxPainValue = marketData?.analytics?.maxPain || marketData?.max_pain;
           const isMaxPain = row.strike === maxPainValue;
+          
+          let isAtm = false;
+          if (marketData?.spot?.ltp) {
+            let closestIdx = 0;
+            let minDiff = Infinity;
+            chain.forEach((r, idx) => {
+              const diff = Math.abs(r.strike - marketData.spot.ltp);
+              if (diff < minDiff) {
+                minDiff = diff;
+                closestIdx = idx;
+              }
+            });
+            isAtm = row.strike === chain[closestIdx]?.strike;
+          }
+
           const isCeHighVolume = row.ce_volume > (row.ce_oi * 2) && row.ce_volume > 50000;
           const isPeHighVolume = row.pe_volume > (row.pe_oi * 2) && row.pe_volume > 50000;
           
           return (
-            <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow]}>
+            <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow, isAtm && styles.atmRow]}>
               <View style={styles.chainColSignal}>
                 <Text style={[styles.chainCol, { color: theme.colors.bullish }]}>{row.ce_ltp?.toFixed(2) || '-'} {isCeHighVolume ? '⚡' : ''}</Text>
                 <Text style={styles.greekText}>Δ: {ceGreek.delta.toFixed(2)} | Θ: {ceGreek.theta.toFixed(2)} {ceGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
                 {ceSignal && <Text style={[styles.signalBadge, { backgroundColor: ceSignal.color }]}>{ceSignal.text}</Text>}
               </View>
               
-              <Text style={styles.chainColStrike}>{row.strike}</Text>
+              <View style={styles.chainColStrikeContainer}>
+                <Text style={[styles.chainColStrike, isAtm && styles.atmStrikeText]}>{row.strike}</Text>
+                {isAtm && <Text style={styles.atmBadge}>ATM</Text>}
+              </View>
               
               <View style={styles.chainColSignal}>
                 <Text style={[styles.chainCol, { color: theme.colors.bearish }]}>{row.pe_ltp?.toFixed(2) || '-'} {isPeHighVolume ? '⚡' : ''}</Text>
@@ -249,6 +267,26 @@ const getStyles = (theme) => StyleSheet.create({
     borderBottomWidth: 2,
     borderColor: '#FFD700',
     backgroundColor: 'rgba(255, 215, 0, 0.05)',
+  },
+  atmRow: {
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: theme.colors.borderLight,
+  },
+  chainColStrikeContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  atmStrikeText: {
+    color: theme.colors.primary,
+  },
+  atmBadge: {
+    fontSize: 8,
+    color: theme.colors.primary,
+    fontWeight: 'bold',
+    marginTop: 2,
   },
   warningBanner: {
     padding: 12,
