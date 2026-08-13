@@ -1113,6 +1113,9 @@ _FYERS_WS_SOCKET = None
 _FYERS_WS_SYMBOLS = set()
 _FYERS_WS_TICKS = {}
 _PREV_TICK_VOLUMES = {}
+_DAILY_VIX_HIGH = -1
+_DAILY_VIX_LOW = 999
+
 _FYERS_WS_STATUS = {
     "connected": False,
     "started": False,
@@ -3341,7 +3344,14 @@ def build_dashboard(symbol_key, cache_ttl=10):
         market_regime
     )
 
+
+    iv_rank = 50
+    vix_ltp = safe_float(vix.get("ltp"))
+    if vix_ltp and _DAILY_VIX_HIGH > 0 and _DAILY_VIX_HIGH > _DAILY_VIX_LOW:
+        iv_rank = round2(((vix_ltp - _DAILY_VIX_LOW) / (_DAILY_VIX_HIGH - _DAILY_VIX_LOW)) * 100)
+
     analytics = {
+        "ivRank": iv_rank,
         "pcr": pcr,
         "callOiChange": call_oi_change_total,
         "putOiChange": put_oi_change_total,

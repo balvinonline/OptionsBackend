@@ -84,6 +84,9 @@ export const MarketProvider = ({ children }) => {
     const isBullishGate = pcr > 1.05 && totalPeOiChg > totalCeOiChg && spotChange >= 0;
     const isBearishGate = pcr < 0.95 && totalCeOiChg > totalPeOiChg && spotChange <= 0;
 
+    const bearishDivergence = spotChange > 0 && totalCeOiChg > totalPeOiChg;
+    const bullishDivergence = spotChange < 0 && totalPeOiChg > totalCeOiChg;
+
     let signalType = 'NEUTRAL';
     let signalStrength = 'MODERATE';
     let confidence = 50;
@@ -118,6 +121,8 @@ export const MarketProvider = ({ children }) => {
       stopLoss: signalType === 'BUY_CE' ? (spotVal * 0.007 * 0.8).toFixed(1) : (spotVal * 0.007 * 0.8).toFixed(1),
       absorptionDetected: marketData?.absorption_detected || false,
       trapWarning: marketData?.trap_detected || (pcr > 1.3 && spotChange < -30 ? 'CE Trap' : pcr < 0.7 && spotChange > 30 ? 'PE Trap' : null),
+      bearishDivergence,
+      bullishDivergence,
     };
   }, [marketData, atm]);
 
@@ -679,6 +684,8 @@ export const MarketProvider = ({ children }) => {
         tradeGateAnalysis,
         pcrBuckets5m,
         pcrBuckets15m,
+        bearishDivergence: signalAnalysis?.bearishDivergence || false,
+        bullishDivergence: signalAnalysis?.bullishDivergence || false,
         liveGreeks,
         whaleAlerts,
         atm,

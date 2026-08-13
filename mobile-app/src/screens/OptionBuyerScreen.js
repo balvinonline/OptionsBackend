@@ -5,7 +5,7 @@ import { useMarket } from '../context/MarketContext';
 
 export const OptionBuyerScreen = ({ onNavigate }) => {
   const { theme } = useTheme();
-  const { marketData, liveGreeks, whaleAlerts } = useMarket();
+  const { marketData, liveGreeks, whaleAlerts, bearishDivergence, bullishDivergence } = useMarket();
   const styles = getStyles(theme);
 
   const chain = marketData?.chain || [];
@@ -50,7 +50,20 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
           <Text style={styles.cardTitle}>IV Status</Text>
           <Text style={styles.cardValue}>Spiking</Text>
         </View>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Intraday IV Rank</Text>
+          <Text style={styles.cardValue}>{marketData?.analytics?.ivRank != null ? `${marketData.analytics.ivRank}%` : '-'}</Text>
+        </View>
       </View>
+
+      {/* Divergence Warning Banner */}
+      {(bearishDivergence || bullishDivergence) && (
+        <View style={[styles.warningBanner, { backgroundColor: bearishDivergence ? '#FFEBEE' : '#E8F5E9', borderColor: bearishDivergence ? '#D50000' : '#00C853' }]}>
+          <Text style={[styles.warningText, { color: bearishDivergence ? '#D50000' : '#00C853' }]}>
+            {bearishDivergence ? '⚠️ BEARISH PCR DIVERGENCE: Trap Risk' : '⚠️ BULLISH PCR DIVERGENCE: Trap Risk'}
+          </Text>
+        </View>
+      )}
 
       {/* Buyer's Chain */}
       <Text style={styles.sectionTitle}>Buyer's Chain</Text>
@@ -63,22 +76,26 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
         {displayChain.map((row) => {
           const ceSignal = getSignal(row.ce_ch, row.ce_oich, 'Call');
           const peSignal = getSignal(row.pe_ch, row.pe_oich, 'Put');
-          const ceGreek = liveGreeks[row.ce_symbol] || { delta: 0, theta: 0 };
-          const peGreek = liveGreeks[row.pe_symbol] || { delta: 0, theta: 0 };
+          const ceGreek = liveGreeks[row.ce_symbol] || { delta: 0, theta: 0, gamma: 0 };
+          const peGreek = liveGreeks[row.pe_symbol] || { delta: 0, theta: 0, gamma: 0 };
+          const maxPainValue = marketData?.analytics?.maxPain || marketData?.max_pain;
+          const isMaxPain = row.strike === maxPainValue;
+          const isCeHighVolume = row.ce_volume > (row.ce_oi * 2) && row.ce_volume > 0;
+          const isPeHighVolume = row.pe_volume > (row.pe_oi * 2) && row.pe_volume > 0;
           
           return (
-            <View key={row.strike} style={styles.chainRow}>
-              <View style={styles.chainColSignal}>
+            <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow]}>
+              <View style={[styles.chainColSignal, isCeHighVolume && styles.highVolumeBg]}>
                 <Text style={[styles.chainCol, { color: theme.colors.bullish }]}>{row.ce_ltp?.toFixed(2) || '-'}</Text>
-                <Text style={styles.greekText}>Δ: {ceGreek.delta.toFixed(2)} | Θ: {ceGreek.theta.toFixed(2)}</Text>
+                <Text style={styles.greekText}>Δ: {ceGreek.delta.toFixed(2)} | Θ: {ceGreek.theta.toFixed(2)} {ceGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
                 {ceSignal && <Text style={[styles.signalBadge, { backgroundColor: ceSignal.color }]}>{ceSignal.text}</Text>}
               </View>
               
               <Text style={styles.chainColStrike}>{row.strike}</Text>
               
-              <View style={styles.chainColSignal}>
+              <View style={[styles.chainColSignal, isPeHighVolume && styles.highVolumeBg]}>
                 <Text style={[styles.chainCol, { color: theme.colors.bearish }]}>{row.pe_ltp?.toFixed(2) || '-'}</Text>
-                <Text style={styles.greekText}>Δ: {peGreek.delta.toFixed(2)} | Θ: {peGreek.theta.toFixed(2)}</Text>
+                <Text style={styles.greekText}>Δ: {peGreek.delta.toFixed(2)} | Θ: {peGreek.theta.toFixed(2)} {peGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
                 {peSignal && <Text style={[styles.signalBadge, { backgroundColor: peSignal.color }]}>{peSignal.text}</Text>}
               </View>
             </View>
@@ -219,5 +236,26 @@ const getStyles = (theme) => StyleSheet.create({
     fontStyle: 'italic',
     textAlign: 'center',
     padding: 10,
+  },
+  maxPainRow: {
+    borderTopWidth: 2,
+    borderBottomWidth: 2,
+    borderColor: '#FFD700',
+    backgroundColor: 'rgba(255, 215, 0, 0.05)',
+  },
+  highVolumeBg: {
+    backgroundColor: 'rgba(255, 215, 0, 0.2)',
+    borderRadius: 4,
+  },
+  warningBanner: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  warningText: {
+    fontWeight: 'bold',
+    fontSize: 14,
   }
 });
