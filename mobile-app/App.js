@@ -21,7 +21,7 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 import { Sidebar } from './src/components/Sidebar';
 
 function MainLayout() {
-  const [activeTab, setActiveTab] = useState('Signals');
+  const [activeTab, setActiveTab] = useState('Dashboard');
   const [webFeatureParams, setWebFeatureParams] = useState(null);
   const [deskSymbol, setDeskSymbol] = useState(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -42,11 +42,12 @@ function MainLayout() {
           <Ionicons name="menu" size={28} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         {activeTab !== 'Dashboard' && !deskSymbol && (
-          <TouchableOpacity style={{ marginRight: 15 }} onPress={() => setActiveTab('Dashboard')}>
-            <Ionicons name="arrow-back" size={24} color={theme.colors.textPrimary} />
+          <TouchableOpacity style={styles.backButtonPill} onPress={() => setActiveTab('Dashboard')}>
+            <Ionicons name="arrow-back" size={20} color={theme.colors.textPrimary} />
+            <Text style={styles.backButtonText}>Back</Text>
           </TouchableOpacity>
         )}
-        <Text style={styles.headerTitle}>{deskSymbol ? `${deskSymbol} Desk` : 'Options Desk'}</Text>
+        <Text style={styles.headerTitle}>{deskSymbol ? `${deskSymbol} Desk` : (activeTab === 'Dashboard' ? 'Dashboard' : 'Options Desk')}</Text>
       </View>
 
       {/* Screen Views with conditional rendering to prevent out-of-memory crashes on mobile */}
@@ -193,6 +194,23 @@ const getStyles = (theme) => StyleSheet.create({
     opacity: 1,
     zIndex: 1,
     pointerEvents: 'auto',
+  },
+  backButtonPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surfaceLight,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 15,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+  },
+  backButtonText: {
+    color: theme.colors.textPrimary,
+    marginLeft: 4,
+    fontSize: 14,
+    fontWeight: '600',
   },
   backButton: {
     position: 'absolute',

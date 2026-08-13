@@ -20,6 +20,11 @@ const apiClient = axios.create({
 
 apiClient.interceptors.request.use(async (config) => {
   config.baseURL = currentServerUrl;
+  
+  // Bypass localtunnel warning page
+  config.headers['Bypass-Tunnel-Reminder'] = 'true';
+  config.headers['localtunnel-bypass'] = 'true';
+
   const { token } = await getStoredAuth();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;

@@ -73,7 +73,13 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const startWebViewLogin = async () => {
     try {
       setIsTotpLoading(true);
-      const resp = await fetch(`${serverUrl}/api/fyers/login-url`);
+      const targetUrl = inputUrl.trim() || serverUrl;
+      const resp = await fetch(`${targetUrl}/api/fyers/login-url`, {
+        headers: {
+          'Bypass-Tunnel-Reminder': 'true',
+          'localtunnel-bypass': 'true'
+        }
+      });
       const data = await resp.json();
       if (data.loginUrl) {
         setLoginUrl(data.loginUrl);
@@ -102,9 +108,14 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const handleSubmitAuthCode = async (finalUrl) => {
     setIsTotpLoading(true);
     try {
-      const resp = await fetch(`${serverUrl}/api/fyers/save-token`, {
+      const targetUrl = inputUrl.trim() || serverUrl;
+      const resp = await fetch(`${targetUrl}/api/fyers/save-token`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Bypass-Tunnel-Reminder': 'true',
+          'localtunnel-bypass': 'true'
+        },
         body: JSON.stringify({ authCode: finalUrl })
       });
       const data = await resp.json();
@@ -203,7 +214,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
                   onPress={() => setInputUrl(CLOUD_SERVER_URL)}
                 >
                   <Ionicons name="cloud" size={12} color={theme.colors.primary} />
-                  <Text style={[styles.presetText, { color: theme.colors.primary }]}>☁️ Render Cloud (24/7)</Text>
+                  <Text style={[styles.presetText, { color: theme.colors.primary }]}>☁️ Live Local Tunnel (24/7)</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.presetBtn}

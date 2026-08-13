@@ -430,6 +430,10 @@ export const MarketProvider = ({ children }) => {
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
+      extraHeaders: {
+        'Bypass-Tunnel-Reminder': 'true',
+        'localtunnel-bypass': 'true'
+      }
     });
 
     const tickBuffer = {};
@@ -437,7 +441,8 @@ export const MarketProvider = ({ children }) => {
 
     socket.on('connect', () => {
       // Re-subscribe to everything when connecting or reconnecting
-      socket.emit('subscribe', { symbols: [selectedIndex, 'NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY'] });
+      socket.emit('subscribe', { symbols: [selectedIndex] });
+      socket.emit('subscribe_strip', { symbols: ['NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY'].filter(s => s !== selectedIndex) });
     });
 
     socket.on('tick', (data) => {
@@ -471,7 +476,7 @@ export const MarketProvider = ({ children }) => {
         let stripModified = false;
         const newStrip = prev.map(item => {
           // If the tick symbol matches the Fyers symbol OR the strip label
-          const data = updates[item.symbol] || updates[item.label] || updates[`NSE:${item.label.replace(' 50', '50')}-INDEX`] || updates[`BSE:SENSEX-INDEX`];
+          const data = updates[item.symbol] || updates[item.label] || updates[`NSE:${item.label.replace(' 50', '50')}-INDEX`];
           if (data) {
             stripModified = true;
             

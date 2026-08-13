@@ -10,7 +10,7 @@ const KEYS = {
   HAPTIC_ENABLED: 'OPTION_DESK_HAPTIC_ENABLED',
 };
 
-export const CLOUD_SERVER_URL = 'https://optionsbackend.onrender.com';
+export const CLOUD_SERVER_URL = 'http://192.168.0.193:5000';
 
 // Default server URL - defaults to your 24/7 Render Cloud Server
 export const getDefaultServerUrl = () => {
