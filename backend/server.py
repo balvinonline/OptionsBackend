@@ -50,7 +50,7 @@ app = Flask(__name__, static_folder=str(dist_folder), static_url_path='/')
 CORS(app)
 
 from flask_socketio import SocketIO, emit, join_room, leave_room
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 @app.errorhandler(404)
 def not_found(e):
