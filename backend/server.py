@@ -2146,10 +2146,11 @@ def update_leg_values(row, side, source):
     symbol = pick_first(source, ["symbol", "fySymbol", "fyersSymbol", "ex_symbol"], None)
     token = pick_first(source, ["fyToken", "token", "instrument_token"], None)
     ltp = round2(pick_first(source, ["ltp", "lastPrice", "lp", "price"], None))
+    ch = round2(pick_first(source, ["ch", "change", "netChange", "price_change", "chng"], None))
     bid = round2(pick_first(source, ["bid", "bidPrice", "bestBid", "buyPrice"], None))
     ask = round2(pick_first(source, ["ask", "askPrice", "bestAsk", "sellPrice", "offer"], None))
     oi = safe_int(pick_first(source, ["oi", "openInterest", "open_interest"], None), None)
-    oich = safe_int(pick_first(source, ["oich", "changeinOpenInterest", "oiChange", "oi_change"], None), None)
+    oich = safe_int(pick_first(source, ["oich", "chngInOI", "changeinOpenInterest", "oiChange", "oi_change"], None), None)
     volume = safe_int(pick_first(source, ["volume", "vol", "tradedVolume", "volume_traded"], None), None)
     iv = round2(
     pick_first(
@@ -2174,6 +2175,8 @@ def update_leg_values(row, side, source):
             row["ce_token"] = str(token).strip()
         if ltp is not None:
             row["ce_ltp"] = ltp
+        if ch is not None:
+            row["ce_ch"] = ch
         if bid is not None:
             row["ce_bid"] = bid
         if ask is not None:
@@ -2194,6 +2197,8 @@ def update_leg_values(row, side, source):
             row["pe_token"] = str(token).strip()
         if ltp is not None:
             row["pe_ltp"] = ltp
+        if ch is not None:
+            row["pe_ch"] = ch
         if bid is not None:
             row["pe_bid"] = bid
         if ask is not None:
@@ -2256,6 +2261,7 @@ def parse_option_chain(raw, spot_price):
             by_strike[strike] = {
                 "strike": strike,
                 "ce_ltp": None,
+                "ce_ch": None,
                 "ce_oi": None,
                 "ce_oich": None,
                 "ce_volume": None,
@@ -2263,6 +2269,7 @@ def parse_option_chain(raw, spot_price):
                 "ce_symbol": None,
                 "ce_token": None,
                 "pe_ltp": None,
+                "pe_ch": None,
                 "pe_oi": None,
                 "pe_oich": None,
                 "pe_volume": None,
@@ -2284,8 +2291,9 @@ def parse_option_chain(raw, spot_price):
             "symbol": pick_first(item, ["symbol", "fySymbol", "fyersSymbol", "ex_symbol"], None),
             "fyToken": pick_first(item, ["fyToken", "token", "instrument_token"], None),
             "ltp": pick_first(item, ["ce_ltp", "pe_ltp", "ltp", "lastPrice", "lp"], None),
+            "ch": pick_first(item, ["ce_ch", "pe_ch", "ch", "change", "netChange", "price_change", "chng"], None),
             "oi": pick_first(item, ["oi_CE", "oi_PE", "ce_oi", "pe_oi", "oi", "openInterest"], None),
-            "oich": pick_first(item, ["oich_CE", "oich_PE", "ce_oich", "pe_oich", "oich", "changeinOpenInterest"], None),
+            "oich": pick_first(item, ["oich_CE", "oich_PE", "ce_oich", "pe_oich", "oich", "changeinOpenInterest", "chngInOI"], None),
             "volume": pick_first(item, ["volume_CE", "volume_PE", "ce_volume", "pe_volume", "volume", "vol"], None),
             "iv": pick_first(item, ["iv_CE", "iv_PE", "ce_iv", "pe_iv", "iv"], None),
         }
@@ -5680,6 +5688,7 @@ def build_stock_options_detail(symbol, cache_ttl=8):
         chain = enrich_chain_with_greeks(chain, spot_price, "NIFTY")
     signal = build_stock_option_signal(quote, future_quote, chain)
     levels = build_stock_option_levels(quote, chain)
+    max_pain = compute_max_pain(chain)
 
     result = {
         "symbol": stock_symbol.replace("NSE:", "").replace("-EQ", ""),
@@ -5692,6 +5701,7 @@ def build_stock_options_detail(symbol, cache_ttl=8):
         "optionChain": chain,
         "signal": signal,
         "levels": levels,
+        "max_pain": max_pain,
         "chainRows": len(chain),
     }
     set_cached("stock_options_detail", result, key=cache_key)
