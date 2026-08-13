@@ -1,9 +1,11 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
 export const KpiCard = ({ data, atm }) => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
   const spot = Number(data?.spot || 0);
   const change = Number(data?.change || 0);
   const pctChange = Number(data?.pChange || data?.pct_change || 0);
@@ -39,9 +41,9 @@ export const KpiCard = ({ data, atm }) => {
           <Ionicons
             name={isPositive ? 'arrow-up' : 'arrow-down'}
             size={14}
-            color={isPositive ? THEME.colors.bullish : THEME.colors.bearish}
+            color={isPositive ? theme.colors.bullish : theme.colors.bearish}
           />
-          <Text style={[styles.badgeText, { color: isPositive ? THEME.colors.bullish : THEME.colors.bearish }]}>
+          <Text style={[styles.badgeText, { color: isPositive ? theme.colors.bullish : theme.colors.bearish }]}>
             {change > 0 ? `+${formatNumber(change)}` : formatNumber(change)} ({pctChange.toFixed(2)}%)
           </Text>
         </View>
@@ -52,65 +54,69 @@ export const KpiCard = ({ data, atm }) => {
         <MetricTile
           label="PCR (OI)"
           value={pcr > 0 ? pcr.toFixed(2) : '-'}
-          color={pcr >= 1.05 ? THEME.colors.bullish : pcr <= 0.95 ? THEME.colors.bearish : THEME.colors.warning}
+          color={pcr >= 1.05 ? theme.colors.bullish : pcr <= 0.95 ? theme.colors.bearish : theme.colors.warning}
           subtitle={pcr >= 1.05 ? 'Bullish' : pcr <= 0.95 ? 'Bearish' : 'Neutral'}
         />
 
         <MetricTile
           label="India VIX"
           value={vix > 0 ? vix.toFixed(2) : '-'}
-          color={vix > 16 ? THEME.colors.bearish : THEME.colors.primary}
+          color={vix > 16 ? theme.colors.bearish : theme.colors.primary}
           subtitle={vix > 16 ? 'High Volatility' : 'Normal'}
         />
 
         <MetricTile
           label="ATM Strike"
           value={atm ? formatNumber(atm) : '-'}
-          color={THEME.colors.primaryLight}
+          color={theme.colors.primaryLight}
         />
 
         <MetricTile
           label="Total PE OI"
           value={formatOi(putOi)}
-          color={THEME.colors.bullish}
+          color={theme.colors.bullish}
           subtitle="Support OI"
         />
 
         <MetricTile
           label="Total CE OI"
           value={formatOi(callOi)}
-          color={THEME.colors.bearish}
+          color={theme.colors.bearish}
           subtitle="Resistance OI"
         />
 
         <MetricTile
           label="OI Diff (PE - CE)"
           value={formatOi(putOi - callOi)}
-          color={putOi >= callOi ? THEME.colors.bullish : THEME.colors.bearish}
+          color={putOi >= callOi ? theme.colors.bullish : theme.colors.bearish}
         />
       </View>
     </View>
   );
 };
 
-const MetricTile = ({ label, value, color, subtitle }) => (
-  <View style={styles.tile}>
-    <Text style={styles.tileLabel}>{label}</Text>
-    <Text style={[styles.tileValue, { color: color || THEME.colors.textPrimary }]}>{value}</Text>
-    {subtitle ? <Text style={styles.tileSubtitle}>{subtitle}</Text> : null}
-  </View>
-);
+const MetricTile = ({ label, value, color, subtitle }) => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
+  return (
+    <View style={styles.tile}>
+      <Text style={styles.tileLabel}>{label}</Text>
+      <Text style={[styles.tileValue, { color: color || theme.colors.textPrimary }]}>{value}</Text>
+      {subtitle ? <Text style={styles.tileSubtitle}>{subtitle}</Text> : null}
+    </View>
+  );
+};
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   container: {
-    backgroundColor: THEME.colors.bgCardSolid,
+    backgroundColor: theme.colors.bgCardSolid,
     borderRadius: 16,
     padding: 16,
     marginHorizontal: 14,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: THEME.colors.border,
-    ...THEME.shadows.card,
+    borderColor: theme.colors.border,
+    ...theme.shadows.card,
   },
   spotRow: {
     flexDirection: 'row',
@@ -119,16 +125,16 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.borderLight,
+    borderBottomColor: theme.colors.borderLight,
   },
   spotLabel: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   spotValue: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 26,
     fontWeight: '900',
     marginTop: 2,
@@ -142,14 +148,14 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   badgeBullish: {
-    backgroundColor: THEME.colors.bullishBg,
+    backgroundColor: theme.colors.bullishBg,
     borderWidth: 1,
-    borderColor: THEME.colors.bullishBorder,
+    borderColor: theme.colors.bullishBorder,
   },
   badgeBearish: {
-    backgroundColor: THEME.colors.bearishBg,
+    backgroundColor: theme.colors.bearishBg,
     borderWidth: 1,
-    borderColor: THEME.colors.bearishBorder,
+    borderColor: theme.colors.bearishBorder,
   },
   badgeText: {
     fontWeight: '800',
@@ -163,14 +169,14 @@ const styles = StyleSheet.create({
   },
   tile: {
     width: '31%',
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderRadius: 10,
     padding: 8,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   tileLabel: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 10,
     fontWeight: '700',
   },
@@ -180,7 +186,7 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   tileSubtitle: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 9,
     marginTop: 2,
   },

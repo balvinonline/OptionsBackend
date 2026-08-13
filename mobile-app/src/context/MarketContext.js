@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../services/api';
+import { api, getApiBaseUrl } from '../services/api';
+import io from 'socket.io-client';
 import { soundManager } from '../components/AudioAlertHelper';
 
 const MarketContext = createContext(null);
@@ -20,7 +21,7 @@ const getBucketTime = (date = new Date(), intervalMinutes = 5) => {
 
 export const MarketProvider = ({ children }) => {
   const [selectedIndex, setSelectedIndex] = useState('NIFTY');
-  const [strikeCount, setStrikeCount] = useState(25);
+  const [strikeCount, setStrikeCount] = useState(10);
   const [pcrInterval, setPcrInterval] = useState(5); // 5 or 15 minutes
 
   // Real-time market state
@@ -40,6 +41,8 @@ export const MarketProvider = ({ children }) => {
   const [isConnected, setIsConnected] = useState(false);
 
   const prevSignalRef = useRef(null);
+  const selectedIndexRef = useRef('NIFTY');
+  const [marketDataCache, setMarketDataCache] = useState({});
 
   // Compute ATM strike
   const atm = useMemo(() => {
@@ -62,7 +65,7 @@ export const MarketProvider = ({ children }) => {
 
   // Compute Buyer Signal & Market Gate Status
   const signalAnalysis = useMemo(() => {
-    if (!marketData) return null;
+    if (!marketData || marketData.isPlaceholder) return null;
     
     const pcr = Number(marketData.pcr_oi || 1.0);
     const spotChange = Number(marketData.change || 0);
@@ -118,7 +121,7 @@ export const MarketProvider = ({ children }) => {
 
   // Compute 20-Point Option Buyer Trade Gate Checklist
   const tradeGateAnalysis = useMemo(() => {
-    if (!marketData) return { score: 0, total: 20, verdict: 'AWAITING DATA', items: [] };
+    if (!marketData || marketData.isPlaceholder) return { score: 0, total: 20, verdict: 'AWAITING DATA', items: [] };
 
     const pcr = Number(marketData.pcr_oi || 1.0);
     const spotChange = Number(marketData.change || 0);
@@ -295,7 +298,7 @@ export const MarketProvider = ({ children }) => {
 
   // Update PCR 5m & 15m time bucket histories
   const updatePcrBuckets = (normData) => {
-    if (!normData || !normData.spot) return;
+    if (!normData || !normData.spot || normData.isPlaceholder) return;
 
     const now = new Date();
     const bucket5m = getBucketTime(now, 5);
@@ -340,13 +343,16 @@ export const MarketProvider = ({ children }) => {
 
   // Fetch full data for selected index
   const fetchData = async (isManual = false) => {
+    const requestedIndex = selectedIndexRef.current;
     if (isManual) setIsRefreshing(true);
     try {
       // Primary dashboard endpoint
-      const res = await api.getIndexData(selectedIndex, strikeCount);
+      const res = await api.getIndexData(requestedIndex, strikeCount);
       if (res) {
+        if (requestedIndex !== selectedIndexRef.current) return;
         const normalized = normalizeMarketData(res);
         setMarketData(normalized);
+        setMarketDataCache((prev) => ({ ...prev, [requestedIndex]: normalized }));
         updatePcrBuckets(normalized);
         setIsConnected(true);
         setError('');
@@ -355,22 +361,28 @@ export const MarketProvider = ({ children }) => {
     } catch (e) {
       // Fallback to legacy index endpoint
       try {
-        const legacyRes = await api.getIndexLegacy(selectedIndex, strikeCount);
+        if (requestedIndex !== selectedIndexRef.current) return;
+        const legacyRes = await api.getIndexLegacy(requestedIndex, strikeCount);
         if (legacyRes) {
+          if (requestedIndex !== selectedIndexRef.current) return;
           const normalized = normalizeMarketData(legacyRes);
           setMarketData(normalized);
+          setMarketDataCache((prev) => ({ ...prev, [requestedIndex]: normalized }));
           updatePcrBuckets(normalized);
           setIsConnected(true);
           setError('');
           setLastUpdated(formatTime());
         }
       } catch (err2) {
+        if (requestedIndex !== selectedIndexRef.current) return;
         setIsConnected(false);
         setError(err2.message || 'Connecting to backend...');
       }
     } finally {
-      setIsLoading(false);
-      if (isManual) setIsRefreshing(false);
+      if (requestedIndex === selectedIndexRef.current) {
+        setIsLoading(false);
+        if (isManual) setIsRefreshing(false);
+      }
     }
   };
 
@@ -410,29 +422,232 @@ export const MarketProvider = ({ children }) => {
   };
 
   // Initial load and polling
+  // Real-time WebSocket ticks
   useEffect(() => {
-    fetchData();
-    fetchMarketAux();
+    const socket = io(getApiBaseUrl(), {
+      transports: ['websocket'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+    });
 
-    const interval = setInterval(() => {
-      fetchData();
-    }, 2500);
+    const tickBuffer = {};
+    const chainTickBuffer = {}; // specific buffer for option chain symbols
 
-    const auxInterval = setInterval(() => {
-      fetchMarketAux();
-    }, 15000);
+    socket.on('connect', () => {
+      // Re-subscribe to everything when connecting or reconnecting
+      socket.emit('subscribe', { symbols: [selectedIndex, 'NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY'] });
+    });
+
+    socket.on('tick', (data) => {
+      if (data && data.symbol) {
+        tickBuffer[data.symbol] = data;
+        
+        // If it's an option symbol (contains CE or PE), buffer it for the chain
+        if (data.symbol.includes('CE') || data.symbol.includes('PE')) {
+          chainTickBuffer[data.symbol] = data;
+        }
+      }
+    });
+
+    // Flush ticks at 60 FPS (approx 16ms, but let's do 100ms to save battery on React Native)
+    const flushInterval = setInterval(() => {
+      const bufferedSymbols = Object.keys(tickBuffer);
+      if (bufferedSymbols.length === 0) return;
+      
+      const updates = { ...tickBuffer };
+      const chainUpdates = { ...chainTickBuffer };
+      
+      // Clear buffer
+      for (const key in tickBuffer) delete tickBuffer[key];
+      for (const key in chainTickBuffer) delete chainTickBuffer[key];
+
+      let isCurrentIndex = false;
+      let currentIndexData = null;
+
+      // 1. Update Market Strip
+      setMarketStrip(prev => {
+        let stripModified = false;
+        const newStrip = prev.map(item => {
+          // If the tick symbol matches the Fyers symbol OR the strip label
+          const data = updates[item.symbol] || updates[item.label] || updates[`NSE:${item.label.replace(' 50', '50')}-INDEX`] || updates[`BSE:SENSEX-INDEX`];
+          if (data) {
+            stripModified = true;
+            
+            if (
+               (selectedIndex === 'NIFTY' && item.label === 'NIFTY 50') ||
+               (selectedIndex === 'BANKNIFTY' && item.label === 'NIFTY BANK') ||
+               (selectedIndex === 'SENSEX' && item.label === 'SENSEX') ||
+               (selectedIndex === 'FINNIFTY' && item.label === 'NIFTY FIN SERVICE') ||
+               (selectedIndex === 'MIDCPNIFTY' && item.label === 'NIFTY MIDCAP 100')
+            ) {
+               isCurrentIndex = true;
+               currentIndexData = data;
+            }
+            return { ...item, ...data };
+          }
+          return item;
+        });
+        return stripModified ? newStrip : prev;
+      });
+
+      // 2. Update Spot, and TICK-BY-TICK Option Chain
+      setMarketData(prev => {
+        if (!prev) return prev;
+        
+        let newSpot = prev.spot;
+        let newChange = prev.change;
+        let newChangePct = prev.change_pct;
+        
+        if (isCurrentIndex && currentIndexData) {
+           newSpot = currentIndexData.ltp || prev.spot;
+           newChange = currentIndexData.change || prev.change;
+           newChangePct = currentIndexData.change_pct || prev.change_pct;
+        }
+
+        let newChain = prev.optionChain;
+        let chainModified = false;
+
+        // Apply fast ticks to the option chain rows
+        if (prev.optionChain && Object.keys(chainUpdates).length > 0) {
+          newChain = prev.optionChain.map(row => {
+            let rowModified = false;
+            let updatedRow = { ...row };
+
+            // Check CE tick
+            if (row.ce_symbol && chainUpdates[row.ce_symbol]) {
+              const tick = chainUpdates[row.ce_symbol];
+              updatedRow.ce_ltp = tick.ltp;
+              updatedRow.ce_oi = tick.volume; // Fyers sometimes sends OI in volume for options in lite mode
+              rowModified = true;
+            }
+            // Check PE tick
+            if (row.pe_symbol && chainUpdates[row.pe_symbol]) {
+              const tick = chainUpdates[row.pe_symbol];
+              updatedRow.pe_ltp = tick.ltp;
+              updatedRow.pe_oi = tick.volume;
+              rowModified = true;
+            }
+            
+            if (rowModified) chainModified = true;
+            return updatedRow;
+          });
+        }
+
+        if (isCurrentIndex || chainModified) {
+          const updated = {
+            ...prev,
+            spot: newSpot,
+            change: newChange,
+            change_pct: newChangePct,
+            optionChain: newChain,
+          };
+          setMarketDataCache(cache => ({ ...cache, [selectedIndex]: updated }));
+          return updated;
+        }
+        return prev;
+      });
+      
+    }, 100); // 100ms = 10 updates per second! Lightning fast!
 
     return () => {
-      clearInterval(interval);
-      clearInterval(auxInterval);
+      clearInterval(flushInterval);
+      socket.disconnect();
+    };
+  }, [selectedIndex]);
+
+  useEffect(() => {
+    let isMounted = true;
+    let pollTimeout;
+    let auxTimeout;
+    let isFetchingMain = false;
+    let isFetchingAux = false;
+
+    const pollMainData = async () => {
+      if (!isMounted) return;
+      if (!isFetchingMain) {
+        isFetchingMain = true;
+        await fetchData(false);
+        isFetchingMain = false;
+      }
+      if (isMounted) {
+        pollTimeout = setTimeout(pollMainData, 5000);
+      }
+    };
+
+    const pollAuxData = async () => {
+      if (!isMounted) return;
+      if (!isFetchingAux) {
+        isFetchingAux = true;
+        await fetchMarketAux();
+        isFetchingAux = false;
+      }
+      if (isMounted) {
+        auxTimeout = setTimeout(pollAuxData, 60000); // Throttle heavy endpoints to 60 seconds
+      }
+    };
+
+    // Start polling loops
+    pollMainData();
+    pollAuxData();
+
+    return () => {
+      isMounted = false;
+      clearTimeout(pollTimeout);
+      clearTimeout(auxTimeout);
     };
   }, [selectedIndex, strikeCount]);
+
+  const handleIndexChange = (idx) => {
+    if (idx !== selectedIndex) {
+      selectedIndexRef.current = idx;
+      setSelectedIndex(idx);
+      
+      const cached = marketDataCache[idx];
+      if (cached) {
+        setMarketData(cached);
+        setIsLoading(false);
+      } else {
+        // Fallback to instantly constructing a placeholder from marketStrip
+        setMarketData((prev) => {
+          const fallbackVal = {
+            symbol: idx,
+            spot: 0,
+            change: 0,
+            pChange: 0,
+            isPlaceholder: true,
+            chain: []
+          };
+          
+          if (!marketStrip || marketStrip.length === 0) return fallbackVal;
+
+          const stripItem = marketStrip.find(item => 
+            (idx === 'NIFTY' && item.short_name === 'NIFTY 50') ||
+            (idx === 'BANKNIFTY' && item.short_name === 'NIFTY BANK') ||
+            (idx === 'SENSEX' && item.short_name === 'SENSEX') ||
+            (idx === 'FINNIFTY' && item.short_name === 'NIFTY FIN SERVICE') ||
+            (idx === 'MIDCPNIFTY' && item.short_name === 'NIFTY MIDCAP 100')
+          );
+          
+          if (stripItem) {
+             fallbackVal.spot = stripItem.ltp;
+             fallbackVal.change = stripItem.change;
+             fallbackVal.pChange = stripItem.change_p;
+          }
+          return fallbackVal;
+        });
+        // We do NOT set isLoading=true here. The UI will instantly show the 
+        // spot price placeholder, while the background pollMainData updates the rest!
+      }
+    }
+  };
 
   return (
     <MarketContext.Provider
       value={{
         selectedIndex,
-        setSelectedIndex,
+        setSelectedIndex: handleIndexChange,
         strikeCount,
         setStrikeCount,
         pcrInterval,

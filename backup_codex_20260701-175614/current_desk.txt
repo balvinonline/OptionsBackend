@@ -1,0 +1,774 @@
+function OptionBuyerDesk({
+  setups = [],
+  cards = {},
+  stripByLabel = {},
+  advanceDecline = {},
+  vix = {},
+  mood = {},
+  pcrHistory = {},
+  optionSignalHistory = {},
+  buyerMode = "INTRADAY",
+  onModeChange,
+  signalJournalCount = 0,
+  signalJournal = [],
+  gateHistory = [],
+  readyAlertsEnabled = true,
+  readyAlertBeepMuted = false,
+  onReadyAlertsChange,
+  onReadyBeepMutedChange,
+  onTestReadyAlert,
+  onExportSignals,
+  onExcelReport,
+  onPdfReport,
+  loading = false,
+  onOpen,
+  onChart,
+  onOptionChain,
+  onQuick,
+  selectedSymbol = "",
+  collapsed = false,
+  onCollapse,
+}) {
+  const [whySymbol, setWhySymbolState] = useState(() => sessionStorage.getItem("dashboardWhySymbol") || "");
+  const [whyFullPage, setWhyFullPage] = useState(false);
+  const setWhySymbol = (val) => {
+    setWhySymbolState(val);
+    if (val) sessionStorage.setItem("dashboardWhySymbol", val);
+    else sessionStorage.removeItem("dashboardWhySymbol");
+  };
+  const [deskDensity, setDeskDensity] = useState("FAST");
+  const [sparklineRes, setSparklineRes] = useState("5");
+  const [fastActionMarks, setFastActionMarks] = useState(loadFastActionMarks);
+  const markFastAction = useCallback((key, status, row = {}, option = {}) => {
+    if (!key) return;
+    setFastActionMarks((prev) => {
+      const next = {
+        ...(prev || {}),
+        [key]: {
+          status,
+          ts: Date.now(),
+          symbol: row?.symbol || "",
+          side: option?.side || "",
+          strike: isNum(option?.strike) ? Number(option.strike) : null,
+        },
+      };
+      localStorage.setItem(FAST_ACTION_MARKS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  const setupMap = setups.reduce((acc, setup) => {
+    if (setup?.symbol) acc[setup.symbol] = setup;
+    return acc;
+  }, {});
+  const readyCount = setups.filter((setup) =>
+    setup?.option && setup?.trigger?.ready && setup?.score >= 65 && setup?.warnings?.length <= 1
+  ).length;
+  const rankedSymbols = [...setups]
+    .sort((a, b) => b.score - a.score)
+    .reduce((acc, setup, index) => {
+      if (setup?.symbol) acc[setup.symbol] = index + 1;
+      return acc;
+    }, {});
+
+  const visibleSymbols = selectedSymbol && INDEXES.includes(selectedSymbol) ? [selectedSymbol] : INDEXES;
+  const rows = visibleSymbols.map((item, fixedIndex) => {
+    const card = cards?.[item] || {};
+    const strip = getStripForSymbol(stripByLabel, item);
+    const analytics = card?.analytics || {};
+    const priceRef = {
+      ...(card?.spot || {}),
+      ltp: strip?.ltp ?? card?.spot?.ltp ?? card?.future?.ltp,
+      change: strip?.change ?? card?.spot?.change ?? card?.future?.change,
+      change_pct: strip?.change_pct ?? card?.spot?.change_pct ?? card?.future?.change_pct,
+    };
+    const fallbackBias = biasFromChange(priceRef?.change_pct, card?.quickBias || analytics?.sentiment?.bias || "Neutral");
+    const setup = setupMap[item];
+    if (!isNum(priceRef.ltp) && isNum(setup?.spot)) {
+      priceRef.ltp = setup.spot;
+    }
+    const levels = getCardLevels(card, strip);
+    const previous = analytics?.previousDayLevels || {};
+    const support = levels.supports[0];
+    const resistance = levels.resistances[0];
+    const pivot = previous?.pivot;
+    const vwap = analytics?.vwap ?? card?.spot?.vwap ?? card?.future?.vwap;
+    return {
+      symbol: item,
+      label: INDEX_LABELS[item] || item,
+      card,
+      setup,
+      analytics,
+      price: priceRef?.ltp,
+      change: priceRef?.change,
+      changePct: priceRef?.change_pct,
+      bias: setup?.signal?.bias || fallbackBias,
+      command: getSetupCommand(setup, fallbackBias),
+      levels,
+      pivot,
+      vwap,
+      levelStatus: getLevelStatus({ price: priceRef?.ltp, support, resistance, pivot, vwap }),
+      ad: advanceDecline?.[item] || {},
+      rank: rankedSymbols[item],
+      fixedIndex,
+    };
+  }).sort((a, b) => asNum(a.rank, 99) - asNum(b.rank, 99) || a.fixedIndex - b.fixedIndex);
+  const cleanSetupCount = rows.filter((row) => (
+    row.setup?.option &&
+    row.setup?.trigger?.ready &&
+    asNum(row.setup?.score, 0) >= asNum(BUYER_MODES[buyerMode]?.minConfidence, 60) &&
+    (row.setup?.warnings || []).length <= 1
+  )).length;
+  const watchCount = rows.filter((row) => row.setup?.displayOption || row.setup?.option).length - cleanSetupCount;
+  const avgScore = rows.length
+    ? rows.reduce((sum, row) => sum + asNum(row.setup?.score, 0), 0) / rows.length
+    : 0;
+  const outcomeReport = useMemo(() => buildSignalAnalyticsReport(signalJournal, gateHistory), [gateHistory, signalJournal]);
+  const outcomeSummary = outcomeReport.summary || {};
+  const closedSignals = asNum(outcomeSummary.targetHit, 0) + asNum(outcomeSummary.stoplossHit, 0);
+  const breadthNet = rows.reduce((sum, row) => sum + (asNum(row.ad?.advances, 0) - asNum(row.ad?.declines, 0)), 0);
+  const vixLevel = asNum(vix?.ltp, null);
+  const vixChange = asNum(vix?.change_pct, 0);
+  const riskTone = (vixLevel >= 17 || vixChange >= 4 || avgScore < 35) ? "error" : (vixLevel >= 15 || cleanSetupCount === 0) ? "warning" : "success";
+  const riskLabel = riskTone === "error" ? "High Risk" : riskTone === "warning" ? "Selective" : "Normal";
+  const whyRow = rows.find((row) => row.symbol === whySymbol);
+  const whySetup = whyRow?.setup;
+  const whyOption = whySetup?.option || whySetup?.displayOption;
+  const whyFreshness = whySetup ? getCombinedFreshness(whySetup.timeframeFreshness) : null;
+  const whyOptionTrack = whySetup ? getOptionSignalTracker(optionSignalHistory, whySetup.symbol, whyOption) : {};
+  const whyWriterShift = whySetup ? getWriterShiftSignal(whySetup) : {};
+  const whyLevelShift = whySetup ? getLevelShiftSignal(optionSignalHistory, whySetup.symbol, whyRow?.levels, whySetup.analytics || whyRow?.analytics || {}) : {};
+  const whyFastItems = whySetup ? [
+    {
+      label: "Final",
+      status: whySetup.noTradeGate?.blocked ? "AVOID" : whySetup.professionalGate?.decision || "WAIT",
+      tone: whySetup.noTradeGate?.blocked ? "error" : whySetup.professionalGate?.tone || "warning",
+      note: whySetup.noTradeGate?.blocked ? "Do not take fresh trade." : "Main gate is open.",
+    },
+    {
+      label: "Writers",
+      status: whyWriterShift.label || "Collecting",
+      tone: whyWriterShift.tone || "warning",
+      note: whyWriterShift.tone === "success" ? "OI flow supports this side." : whyWriterShift.tone === "error" ? "OI flow is against this side." : "OI flow is not clear yet.",
+    },
+    {
+      label: "VWAP",
+      status: whySetup.vwapState?.label || "Collecting",
+      tone: whySetup.vwapState?.tone || "warning",
+      note: whySetup.vwapState?.aligned ? "Price is on the right side of VWAP." : "VWAP is not supporting.",
+    },
+    {
+      label: "Trend",
+      status: whySetup.trendEngine?.label || whySetup.fifteenTrend?.label || "Collecting",
+      tone: whySetup.trendEngine?.tone || whySetup.fifteenTrend?.tone || "warning",
+      note: whySetup.trendEngine?.compact || whySetup.trendEngine?.reason || "ST, DI, OBV and Pivot check.",
+    },
+    {
+      label: "Levels",
+      status: whyLevelShift.label || "Collecting",
+      tone: whyLevelShift.tone || "warning",
+      note: whyLevelShift.note || "Support/resistance tracking.",
+    },
+    {
+      label: "Data Age",
+      status: whyFreshness?.label || "Collecting",
+      tone: whyFreshness?.tone || "warning",
+      note: whyFreshness?.passed ? "Data is fresh enough." : "Data may be old.",
+    },
+  ] : [];
+  const whyGroups = whySetup ? [
+    {
+      title: "Main Risk Checks",
+      items: [
+        { label: "News/Event", status: whySetup.eventBlocker?.label || "Collect", tone: whySetup.eventBlocker?.tone || "success", note: whySetup.eventBlocker?.tone === "error" ? "Important event risk. Avoid fresh entry." : "No major event block seen." },
+        { label: "Market Time", status: whySetup.sessionQuality?.label || "Collect", tone: whySetup.sessionQuality?.tone || "warning", note: whySetup.sessionQuality?.tone === "error" ? "This time zone is not good for fresh entry." : "Trading time is acceptable." },
+        { label: "Market Breadth", status: whySetup.foActivity?.label || "Collect", tone: whySetup.foActivity?.tone || "warning", note: whySetup.foActivity?.passed === false ? "Many stocks are not supporting this side." : "Stock participation supports the move." },
+        { label: "Big Stocks", status: whySetup.heavyweightCheck?.label || "Collect", tone: whySetup.heavyweightCheck?.tone || "warning", note: whySetup.heavyweightCheck?.passed === false ? "Index heavyweights are not helping." : "Heavyweights are helping the move." },
+        { label: "Setup Score", status: `${whySetup.professionalGate?.setupScore ?? 0}/${whySetup.professionalGate?.setupTotal ?? 11}`, tone: (whySetup.professionalGate?.setupScore ?? 0) >= Math.ceil((whySetup.professionalGate?.setupTotal ?? 11) * 0.66) ? "success" : "error", note: "Main conditions like trend, VWAP, OI, VIX and R:R." },
+        { label: "Entry Score", status: `${whySetup.professionalGate?.entryScore ?? 0}/${whySetup.professionalGate?.entryTotal ?? 8}`, tone: (whySetup.professionalGate?.entryScore ?? 0) >= Math.ceil((whySetup.professionalGate?.entryTotal ?? 8) * 0.8) ? "success" : "warning", note: "Entry timing conditions like 5m, volume, spread and trigger." }
+      ]
+    },
+    {
+      title: "Trend Checks",
+      items: [
+        { label: "Daily", status: whySetup.dailyTrend?.label || "Collect", tone: whySetup.dailyTrend?.tone || "warning", note: "Big trend direction." },
+        { label: "60 Min", status: whySetup.hourlyTrend?.label || "Collect", tone: whySetup.hourlyTrend?.tone || "warning", note: "Medium trend direction." },
+        { label: "15 Min", status: whySetup.fifteenTrend?.label || "Collect", tone: whySetup.fifteenTrend?.tone || "warning", note: "Intraday trend direction." },
+        { label: "ST / DI / OBV / Pivot", status: whySetup.trendEngine?.compact || whySetup.trendEngine?.label || "Collect", tone: whySetup.trendEngine?.tone || "warning", note: whySetup.trendEngine?.reason || "SuperTrend, DI, OBV and Pivot confirmation." },
+        { label: "5 Min Entry", status: whySetup.timeframe?.label || "Collect", tone: whySetup.timeframe?.tone || "warning", note: "Entry candle should support the same side." },
+        { label: "Opening Range", status: whySetup.gapCheck?.label || "Collect", tone: whySetup.gapCheck?.tone || "warning", note: "Checks gap and first 15 minute high/low." },
+        { label: "Momentum", status: whySetup.momentum?.label || "-", tone: whySetup.momentum?.tone || "warning", note: "Checks if price has speed." },
+        { label: "VWAP", status: whySetup.vwapState?.label || "-", tone: whySetup.vwapState?.tone || "warning", note: "CE prefers above VWAP. PE prefers below VWAP." },
+        { label: "Override", status: whySetup.priceOverride?.label || "No Override", tone: whySetup.priceOverride?.active ? "success" : "warning", note: "Only for scalp when price breaks a key level." }
+      ]
+    },
+    {
+      title: "Option Chain Checks",
+      items: [
+        { label: "FII Trend", status: whySetup.fiiFlow?.label || "Collect", tone: whySetup.fiiFlow?.tone || "warning", note: whySetup.fiiFlow?.detail || "Checks if FIIs are trading against you." },
+        { label: "OI / PCR", status: whySetup.oiPcr?.label || "Collect", tone: whySetup.oiPcr?.tone || "warning", note: "Checks whether option-chain pressure supports this side." },
+        { label: "Writers Shift", status: whyWriterShift.label || "Collecting", tone: whyWriterShift.tone || "warning", note: whyWriterShift.note || "Waiting for OI change." },
+        { label: "Strike OI Shift", status: whyOptionTrack.oiShiftLabel || "Collecting", tone: whyOptionTrack.oiShiftTone || "warning", note: whyOptionTrack.oiShiftNote || "Waiting for strike OI." },
+        { label: "Level Shift", status: whyLevelShift.label || "Collecting", tone: whyLevelShift.tone || "warning", note: whyLevelShift.note || "Waiting for S/R history." },
+        { label: "Key OI Level", status: whySetup.smartMoney?.label || "Collect", tone: whySetup.smartMoney?.tone || "warning", note: whySetup.smartMoney?.tone === "error" ? "Important OI level is blocking the trade." : "Important OI level is not blocking badly." },
+        { label: "Max Pain", status: whySetup.maxPainShift?.label || "Collect", tone: whySetup.maxPainShift?.tone || "warning", note: whySetup.maxPainShift?.direction !== 0 ? "Max pain moved today." : "Max pain is stable." },
+        { label: "Premium Move", status: whySetup.premiumMomentum?.label || "Collect", tone: whySetup.premiumMomentum?.tone || "warning", note: "Option premium should move with spot." },
+        { label: "IV Rank", status: whySetup.ivRankQuality?.label || "Collect", tone: whySetup.ivRankQuality?.tone || "warning", note: "Checks if volatility is good for option buying." }
+      ]
+    },
+    {
+      title: "Entry Safety",
+      items: [
+        { label: "Smart Vol", status: whySetup.volumeAbsorption?.label || "Collect", tone: whySetup.volumeAbsorption?.tone || "warning", note: whySetup.volumeAbsorption?.detail || "Checks if Smart Money is absorbing volume." },
+        { label: "Volume", status: whySetup.volumeBreakout?.label || "Collect", tone: whySetup.volumeBreakout?.tone || "warning", note: "Move is better when volume is strong." },
+        { label: "Liquidity", status: whySetup.volumeQuality?.label || "-", tone: whySetup.volumeQuality?.tone || "warning", note: "Option should have enough buyers/sellers." },
+        { label: "Spread", status: whySetup.spreadCheck?.label || "Collect", tone: whySetup.spreadCheck?.tone || "warning", note: "Small bid-ask spread is safer." },
+        { label: "Hunt Trap", status: whySetup.trapDetector?.label || "Collect", tone: whySetup.trapDetector?.tone || "warning", note: whySetup.trapDetector?.detail || "Checks if big players are hunting stop losses." },
+        { label: "S/R Trap", status: whySetup.trap?.label || "-", tone: whySetup.trap?.tone || "warning", note: "Avoid buying into nearby reversal level." },
+        { label: "Expiry", status: whySetup.expiryCheck?.label || "Collect", tone: whySetup.expiryCheck?.tone || "warning", note: "Near expiry has faster theta decay." },
+        { label: "VIX", status: whySetup.vixCheck?.label || "Collect", tone: whySetup.vixCheck?.tone || "warning", note: "Option buying needs helpful volatility." },
+        { label: "Data Age", status: whyFreshness?.label || "Collect", tone: whyFreshness?.tone || "warning", note: `${whyFreshness?.compact || "Collecting"} means how fresh the signal data is.` }
+      ]
+    }
+  ] : [];
+
+  const verdictItems = whySetup ? [
+    { label: "Final Gate", status: whySetup.noTradeGate?.blocked ? whySetup.noTradeGate.label : "Tradable", tone: whySetup.noTradeGate?.tone || "success", note: whySetup.noTradeGate?.blocked ? "Main rule says do not take fresh trade." : "Main rule allows trade." },
+    { label: "Checklist", status: whySetup.professionalGate?.label || "Collect", tone: whySetup.professionalGate?.tone || "warning", note: "Overall professional checklist result." },
+    { label: "Decision", status: whySetup.professionalGate?.decision || "Collect", tone: whySetup.professionalGate?.tone || "warning", note: whySetup.professionalGate?.actionReason || "Waiting for clear reason." },
+    { label: "Override", status: whySetup.priceOverride?.label || "No Override", tone: whySetup.priceOverride?.active ? "success" : "warning", note: whySetup.priceOverride?.active ? "Scalp exception is active." : "No scalp exception." }
+  ] : [];
+
+  return (
+    <SectionCard
+      title="Option Buyer Desk"
+      icon={<ThunderboltOutlined />}
+      collapsible
+      collapsed={collapsed}
+      onCollapse={onCollapse}
+      extra={
+        <Space size={8} wrap>
+          <Segmented
+            size="small"
+            value={buyerMode}
+            onChange={onModeChange}
+            options={Object.entries(BUYER_MODES).map(([value, item]) => ({ label: item.label, value }))}
+          />
+          <Segmented
+            size="small"
+            value={deskDensity}
+            onChange={setDeskDensity}
+            options={[
+              { label: "Fast", value: "FAST" },
+              { label: "Simple", value: "SIMPLE" },
+              { label: "Pro", value: "PRO" },
+              { label: "Compact", value: "COMPACT" },
+              { label: "Full", value: "FULL" },
+            ]}
+          />
+          <Segmented
+            size="small"
+            value={sparklineRes}
+            onChange={setSparklineRes}
+            options={[
+              { label: "5m", value: "5" },
+              { label: "15m", value: "15" },
+            ]}
+          />
+          {loading ? <Spin size="small" /> : <Tag color={readyCount ? "success" : "warning"}>{readyCount ? `${readyCount} Ready` : "Wait"}</Tag>}
+          <Tooltip title="Show toast when a setup becomes READY">
+            <Switch size="small" checked={readyAlertsEnabled} onChange={onReadyAlertsChange} checkedChildren="Alert" unCheckedChildren="Off" />
+          </Tooltip>
+          <Tooltip title="Mute or enable READY alert sound">
+            <Switch size="small" checked={!readyAlertBeepMuted} onChange={(checked) => onReadyBeepMutedChange?.(!checked)} checkedChildren="Beep" unCheckedChildren="Mute" />
+          </Tooltip>
+          {deskDensity !== "FAST" ? <Button size="small" onClick={onTestReadyAlert}>Test Alert</Button> : null}
+        </Space>
+      }
+      className={`desk-card ${deskDensity === "FAST" ? "desk-fast" : ""} ${deskDensity === "SIMPLE" ? "desk-simple" : ""} ${deskDensity === "PRO" ? "desk-pro" : ""} ${deskDensity === "COMPACT" ? "desk-compact" : ""}`}
+    >
+      <div className="decision-cockpit">
+        <div className={`desk-summary-strip ${riskTone}`}>
+          <div>
+            <span>Market</span>
+            <b>{mood?.bias || mood?.label || "Collecting"}</b>
+            <small>{selectedSymbol ? INDEX_LABELS[selectedSymbol] || selectedSymbol : "All major indices"}</small>
+          </div>
+          <div className="top-card-col">
+            <span className="mode-title">{BUYER_MODES[buyerMode]?.label || buyerMode}</span>
+            <small>Req Score: {formatNum(BUYER_MODES[buyerMode]?.minConfidence, 0)}</small>
+          </div>
+          <div>
+            <span>Setups</span>
+            <b>{cleanSetupCount} Clean / {Math.max(watchCount, 0)} Watch</b>
+            <small>{rows.length} index view</small>
+          </div>
+          <div>
+            <span>Breadth</span>
+            <b><DirectionValue value={breadthNet}>{formatNum(breadthNet, 0)}</DirectionValue></b>
+            <small>Net adv/dec on visible cards</small>
+          </div>
+          <div>
+            <span>Risk</span>
+            <b>{riskLabel}</b>
+            <small>VIX {formatNum(vix?.ltp, 2)} {formatPct(vix?.change_pct)}</small>
+          </div>
+        </div>
+        <div className="outcome-accuracy-strip">
+          <span>Outcome <b>{formatNum(outcomeSummary.successRate, 1)}%</b></span>
+          <span>Target <b>{formatNum(outcomeSummary.targetHit, 0)}</b></span>
+          <span>SL <b>{formatNum(outcomeSummary.stoplossHit, 0)}</b></span>
+          <span>Closed <b>{formatNum(closedSignals, 0)}</b></span>
+          <span>Open <b>{formatNum(outcomeSummary.open, 0)}</b></span>
+          <span>Not Testable <b>{formatNum(outcomeSummary.notTestable, 0)}</b></span>
+        </div>
+        {deskDensity === "FAST" ? (
+          <>
+          <div className="fast-action-grid">
+            {rows.map((row) => {
+              const setup = row.setup || {};
+              const plan = setup?.plan || {};
+              const displayOption = setup?.option || setup?.displayOption || {};
+              const tone = setup?.trigger?.tone || setup?.tone || toneFromBias(row.bias);
+              const pcrTrack = getPcrTracker(pcrHistory, row.symbol, row.analytics?.pcr ?? setup?.pcr);
+              const optionTrack = getOptionSignalTracker(optionSignalHistory, row.symbol, displayOption);
+              const signalMeta = getSignalRuntimeMeta(signalJournal, setup);
+              const writerShift = getWriterShiftSignal(setup);
+              const levelShift = getLevelShiftSignal(optionSignalHistory, row.symbol, row.levels, setup.analytics || row.analytics || {});
+              const readiness = getTradeReadiness({ setup, displayOption, pcrTrack, optionTrack });
+              const signalStep = Math.min(3, Math.max(1, asNum(signalMeta?.count, 0) || 1));
+              const actionKey = getFastActionKey(row, displayOption, plan);
+              const actionMark = fastActionMarks?.[actionKey];
+              const actionLabel = actionMark?.status === "TAKEN" ? "Taken" : actionMark?.status === "SKIPPED" ? "Skipped" : "Pending";
+              const decisionText = setup?.noTradeGate?.blocked ? "AVOID" : readiness?.tone === "success" ? "READY" : setup?.priceOverride?.active ? "SCALP" : "WAIT";
+              const displayDecisionText = decisionText === "READY" || decisionText === "SCALP" ? "TAKE ENTRY" : decisionText;
+              const tagStyles = {
+                AVOID: { background: "#ff4d4f", color: "#fff", fontWeight: "bold", border: "none" },
+                WAIT: { background: "#faad14", color: "#000", fontWeight: "bold", border: "none" },
+                READY: { background: "#52c41a", color: "#fff", fontWeight: "bold", border: "none" },
+                SCALP: { background: "#52c41a", color: "#fff", fontWeight: "bold", border: "none" }
+              };
+              const decisionStyle = tagStyles[decisionText] || {};
+              const copySignal = (event) => {
+                event?.stopPropagation?.();
+                const text = `BUY ${row.symbol} ${formatPrice(displayOption?.strike)} ${displayOption?.side || ""} @ ${formatPremium(plan.entry)} | SL ${formatPremium(plan.stoploss)} | TGT ${formatPremium(plan.target)}`;
+                navigator.clipboard?.writeText(text);
+                notification.success({ message: "Signal copied", duration: 2 });
+              };
+
+              return (
+                <div className={`fast-action-card ${tone}`} key={`fast-${row.symbol}`}>
+                  <div className="fast-action-head">
+                    <div className="fast-price-block">
+                      <span>{row.rank ? `#${row.rank} ` : ""}{row.label}</span>
+                      <b className={`price-tone ${toneBySign(row.changePct ?? row.change)}`}>{formatPrice(row.price)}</b>
+                      <small><ChangeText change={row.change} changePct={row.changePct} price={row.price} /></small>
+                    </div>
+                    <div className="fast-head-plan">
+                      <div><span>Entry</span><b>{formatPremium(plan.entry ?? displayOption?.premium)}</b></div>
+                      <div><span>Tgt</span><b>{formatPremium(plan.target)}</b></div>
+                      <div><span>SL</span><b>{formatPremium(plan.stoploss)}</b></div>
+                      <div><span>R:R</span><b>{formatNum(plan.riskReward, 2)}</b></div>
+                    </div>
+                    <Tag style={decisionStyle}>{displayDecisionText}</Tag>
+                  </div>
+
+                  <div className={`fast-signal-line ${actionMark?.status === "TAKEN" ? "taken" : actionMark?.status === "SKIPPED" ? "skipped" : ""}`}>
+                    <b>{displayOption?.strike ? `${formatPrice(displayOption.strike)} ${displayOption.side}` : "No Strike"}</b>
+                    <span>Signal {signalStep}/3</span>
+                    <span>{signalMeta?.count ? `${signalMeta.count} hits` : "First watch"}</span>
+                    <em>{actionLabel}</em>
+                  </div>
+
+                  <div className="fast-check-row">
+                    <div className={writerShift.tone}><span>Writers</span><b>{writerShift.label}</b></div>
+                    <div className={setup?.vwapState?.tone || "warning"}><span>VWAP</span><b>{setup?.vwapState?.aligned ? "Above" : setup?.vwapState?.label || "Wait"}</b></div>
+                    <div className={levelShift.tone}><span>Levels</span><b>{levelShift.label}</b></div>
+                    <div className="success"><span>IV</span><b>{isNum(displayOption?.iv) ? formatNum(displayOption.iv, 2) : "-"}</b></div>
+                    <div className={`fast-trend-cell ${setup?.trendEngine?.tone || "warning"}`}><span>ST / DI / OBV / Pivot</span><b>{setup?.trendEngine?.compact || setup?.trendEngine?.label || "Collect"}</b></div>
+                  </div>
+
+                  <div className="fast-action-buttons">
+                    <Button size="small" type="primary" onClick={() => markFastAction(actionKey, "TAKEN", row, displayOption)}>
+                      Taken
+                    </Button>
+                    <Button size="small" onClick={() => markFastAction(actionKey, "SKIPPED", row, displayOption)}>
+                      Skip
+                    </Button>
+                    <Button size="small" icon={<CopyOutlined />} onClick={copySignal}>
+                      Copy
+                    </Button>
+                    <Button size="small" onClick={(event) => {
+                      event.stopPropagation();
+                      setWhySymbol(row.symbol);
+                    }}>
+                      Why
+                    </Button>
+                    <Button size="small" icon={<LineChartOutlined />} onClick={(event) => {
+                      event.stopPropagation();
+                      onChart?.(row.symbol);
+                    }}>
+                      Chart
+                    </Button>
+                    <Button size="small" onClick={(event) => {
+                      event.stopPropagation();
+                      onOptionChain?.(row.symbol);
+                    }}>
+                      Chain
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+        <div className="index-decision-grid">
+          {rows.map((row) => {
+            const setup = row.setup;
+            const plan = setup?.plan || {};
+            const displayOption = setup?.option || setup?.displayOption;
+            const openDetail = (event, focus = "Signal") => {
+              event?.stopPropagation?.();
+              onOpen?.(row.symbol, "signal", focus);
+            };
+            const tone = setup?.trigger?.tone || setup?.tone || toneFromBias(row.bias);
+            const pcrTrack = getPcrTracker(pcrHistory, row.symbol, row.analytics?.pcr ?? setup?.pcr);
+            const optionTrack = getOptionSignalTracker(optionSignalHistory, row.symbol, displayOption);
+            const signalMeta = getSignalRuntimeMeta(signalJournal, setup);
+            const pcrCard = getPcrCardState(pcrTrack, displayOption?.side);
+            const signalStep = Math.min(3, Math.max(1, asNum(signalMeta?.count, 0) || 1));
+            const readiness = getTradeReadiness({ setup, displayOption, pcrTrack, optionTrack });
+            const expiryLabel = getExpiryLabel({
+              ...(row.card || {}),
+              ...(setup || {}),
+              analytics: setup?.analytics || row.analytics || {},
+              optionChain: setup?.optionChain || row.card?.optionChain || [],
+            });
+
+            return (
+              <div
+                className={`index-decision-card ${tone} clickable-card`}
+                key={row.symbol}
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
+                  if (event.target?.closest?.("button,a,.ant-btn,.ant-tag,.ant-segmented,.ant-select,.ant-modal")) return;
+                  openDetail(event, "Signal");
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") openDetail(event, "Signal");
+                }}
+              >
+                <div className="index-card-head">
+                  <div>
+                    <div className="metric-label" style={{ display: 'flex', alignItems: 'center' }}>
+                      {row.rank ? `#${row.rank} ` : ""}{row.label}
+                      <Sparkline tone={tone} data={row.sparklineData} symbol={row.symbol} resolution={sparklineRes} />
+                    </div>
+        <div className="global-why-cards" style={{ display: "flex", gap: "10px", overflowX: "auto", padding: "8px 0", marginTop: "16px" }}>
+          {rows.flatMap(row => {
+            const symbolLabel = row.label.split(" ")[0];
+            const setup = row.setup || {};
+            const writerShift = setup?.optionFlowDetector?.writerShift || {};
+            
+            return [
+              { label: `${symbolLabel} Writers`, status: writerShift.label || "Collecting", tone: writerShift.tone || "warning", note: writerShift.tone === "success" ? "OI flow supports this side." : writerShift.tone === "error" ? "OI flow is against this side." : "OI flow is not clear yet." },
+              { label: `${symbolLabel} VWAP`, status: setup?.vwapState?.label || "Collecting", tone: setup?.vwapState?.tone || "warning", note: setup?.vwapState?.aligned ? "Price is on the right side of VWAP." : "VWAP is not supporting." },
+              { label: `${symbolLabel} Big Stocks`, status: setup?.heavyweightCheck?.label || "Collect", tone: setup?.heavyweightCheck?.tone || "warning", note: setup?.heavyweightCheck?.passed === false ? "Index heavyweights are not helping." : "Heavyweights are helping the move." }
+            ];
+          }).map((item, idx) => (
+            <div className={`why-fast-card ${item.tone || 'warning'}`} key={idx} style={{ minWidth: "160px", flexShrink: 0, margin: 0 }}>
+              <span>{item.label}</span>
+              <b>{item.status}</b>
+              <small>{item.note}</small>
+            </div>
+          ))}
+        </div>
+        </>
+        ) : null}
+        <div className="index-decision-grid">
+          {rows.map((row) => {
+            const setup = row.setup;
+            const plan = setup?.plan || {};
+            const displayOption = setup?.option || setup?.displayOption;
+            const openDetail = (event, focus = "Signal") => {
+              event?.stopPropagation?.();
+              onOpen?.(row.symbol, "signal", focus);
+            };
+            const tone = setup?.trigger?.tone || setup?.tone || toneFromBias(row.bias);
+            const pcrTrack = getPcrTracker(pcrHistory, row.symbol, row.analytics?.pcr ?? setup?.pcr);
+            const optionTrack = getOptionSignalTracker(optionSignalHistory, row.symbol, displayOption);
+            const signalMeta = getSignalRuntimeMeta(signalJournal, setup);
+            const pcrCard = getPcrCardState(pcrTrack, displayOption?.side);
+            const signalStep = Math.min(3, Math.max(1, asNum(signalMeta?.count, 0) || 1));
+            const readiness = getTradeReadiness({ setup, displayOption, pcrTrack, optionTrack });
+            const expiryLabel = getExpiryLabel({
+              ...(row.card || {}),
+              ...(setup || {}),
+              analytics: setup?.analytics || row.analytics || {},
+              optionChain: setup?.optionChain || row.card?.optionChain || [],
+            });
+
+            return (
+              <div
+                className={`index-decision-card ${tone} clickable-card`}
+                key={row.symbol}
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
+                  if (event.target?.closest?.("button,a,.ant-btn,.ant-tag,.ant-segmented,.ant-select,.ant-modal")) return;
+                  openDetail(event, "Signal");
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") openDetail(event, "Signal");
+                }}
+              >
+                <div className="index-card-head">
+                  <div>
+                    <div className="metric-label" style={{ display: 'flex', alignItems: 'center' }}>
+                      {row.rank ? `#${row.rank} ` : ""}{row.label}
+                      <Sparkline tone={tone} data={row.sparklineData} symbol={row.symbol} resolution={sparklineRes} />
+                    </div>
+                    <div className={`index-price price-tone ${toneBySign(row.changePct ?? row.change)}`}>{formatPrice(row.price)}</div>
+                    <div className="index-change"><ChangeText change={row.change} changePct={row.changePct} price={row.price} /></div>
+                    <div className="index-sr-levels" style={{ marginTop: '8px', fontSize: '11px', color: '#526177' }}>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <span>S:</span>
+                        <b style={{ color: '#52c41a' }}>{formatLevelList(row.levels?.supports)}</b>
+                      </div>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <span>R:</span>
+                        <b style={{ color: '#ff4d4f' }}>{formatLevelList(row.levels?.resistances)}</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="head-center-content" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div className="mini-plan-grid" style={{ marginTop: 0 }}>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Signal")}>
+                        <span>Contract</span>
+                        <b className="actionable-number" style={{ color: '#fff' }}>
+                          {displayOption ? `${formatPrice(displayOption.strike)} ${displayOption.side}` : "No Strike"}
+                          {displayOption && <span style={{ color: '#faad14', marginLeft: '6px', fontSize: '12px' }}>{expiryLabel}</span>}
+                        </b>
+                      </div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Signal")}>
+                        <span>Status</span>
+                        <b className="actionable-number" style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          <em style={{ fontStyle: 'normal', display: 'flex', alignItems: 'center', gap: '5px', color: readiness.tone === 'success' ? '#52c41a' : readiness.tone === 'error' ? '#ff4d4f' : '#faad14' }}>
+                            {readiness.tone === 'success' ? <CheckCircleFilled /> : readiness.tone === 'error' ? <CloseCircleFilled /> : <ExclamationCircleFilled />}
+                            {readiness.label}
+                          </em>
+                          <em style={{ fontStyle: 'normal', opacity: 0.3, fontSize: '0.8em', color: '#fff' }}>|</em>
+                          <em style={{ fontStyle: 'normal', color: tone === 'success' ? '#52c41a' : tone === 'error' ? '#ff4d4f' : tone === 'warning' ? '#faad14' : 'inherit' }}>
+                            {setup?.trigger?.invalidated ? "Invalid" : row.command}
+                          </em>
+                        </b>
+                      </div>
+                      <div className={`clickable-card pcr-signal-card ${pcrCard.tone}`} onClick={(event) => openDetail(event, "PCR")}>
+                        <span>PCR Change</span>
+                        <b className="actionable-number">{pcrCard.label}</b>
+                        <small>{pcrCard.note}</small>
+                      </div>
+                      <div className="clickable-card signal-sequence-card" onClick={(event) => openDetail(event, "Signal Count")}>
+                        <span>Signal</span>
+                        <b className="actionable-number">{signalStep}/3</b>
+                        <small>{signalMeta?.count ? `${signalMeta.count} active hits` : "First watch"}</small>
+                      </div>
+                      {setup?.priceOverride?.active ? (
+                        <div className="clickable-card" onClick={(event) => openDetail(event, "Price Override")}>
+                          <span>Override</span>
+                          <b className="actionable-number" style={{ color: '#faad14' }}>{setup.priceOverride.label}</b>
+                        </div>
+                      ) : null}
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Greeks")}><span>Delta</span><b className="actionable-number" style={{ color: '#1890ff' }}>{displayOption?.delta ?? '-'}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Greeks")}><span>Theta</span><b className="actionable-number" style={{ color: '#ff4d4f' }}>{displayOption?.theta ?? '-'}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Greeks")}><span>Gamma</span><b className="actionable-number" style={{ color: '#eb2f96' }}>{displayOption?.gamma ?? '-'}</b></div>
+                      
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Data")}><span>PCR Now</span><b className="actionable-number" style={{ color: '#13c2c2' }}>{formatNum(row.analytics?.pcr, 2)}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Levels")}><span>VWAP</span><b className="actionable-number">{formatPrice(row.analytics?.vwap ?? row.card?.spot?.vwap)}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Levels")}><span>Pivot</span><b className="actionable-number">{formatPrice(row.analytics?.previousDayLevels?.pivot)}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Levels")}><span>Max Pain</span><b className="actionable-number">{formatPrice(row.analytics?.maxPain)}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Greeks")}><span>IV Rank</span><b className="actionable-number" style={{ color: '#faad14' }}>{displayOption?.ivRank ?? '-'}</b></div>
+                      
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Entry")}>
+                        <span style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>Entry <em style={{ opacity: 0.7, fontStyle: 'normal' }}>({formatNum(plan?.qty, 0)} lots)</em></span>
+                          <CopyOutlined 
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              navigator.clipboard.writeText(`BUY ${row.symbol} ${displayOption?.strike} ${displayOption?.side} @ ${plan.entry} | SL: ${plan.stoploss} | Tgt: ${plan.target}`); 
+                              notification.success({message: 'Signal Copied!', duration: 2});
+                            }} 
+                            style={{ color: '#1890ff', cursor: 'pointer' }}
+                            title="Copy Signal"
+                          />
+                        </span>
+                        <b className="actionable-number">{formatPremium(plan.entry ?? displayOption?.premium)}</b>
+                      </div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Target")}><span>Target</span><b className="actionable-number">{formatPremium(plan.target)}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Stop Loss")}><span>SL</span><b className="actionable-number">{formatPremium(plan.stoploss)}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Trailing")}><span>Trailing</span><b className="actionable-number">{formatPremium(plan.trailing)}</b></div>
+                      <div className="clickable-card" onClick={(event) => openDetail(event, "Risk Reward")}><span>R:R</span><b className="actionable-number">{formatNum(plan.riskReward, 2)}</b></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="index-actions">
+                  <Button size="small" onClick={(event) => {
+                    event.stopPropagation();
+                    setWhySymbol(row.symbol);
+                  }}>Why?</Button>
+                  <Button size="small" icon={<EyeOutlined />} onClick={(event) => {
+                    event.stopPropagation();
+                    onQuick(row.symbol);
+                  }}>Snapshot</Button>
+                  <Button size="small" type="primary" icon={<DashboardOutlined />} onClick={(event) => openDetail(event, "Signal")}>Terminal</Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <Modal
+        title={`${whyRow?.label || "Signal"} setup check`}
+        open={Boolean(whySymbol)}
+        onCancel={() => {
+          setWhySymbol("");
+          setWhyFullPage(false);
+        }}
+        maskClosable={false}
+        footer={(
+          <Space>
+            <Button
+              icon={whyFullPage ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+              onClick={() => setWhyFullPage((prev) => !prev)}
+            >
+              {whyFullPage ? "Compact" : "Full Page"}
+            </Button>
+            <Button onClick={() => {
+              setWhySymbol("");
+              setWhyFullPage(false);
+            }}>Close</Button>
+          </Space>
+        )}
+        width={whyFullPage ? "calc(100vw - 24px)" : 1180}
+        className={`setup-check-modal ${whyFullPage ? "full-page-modal" : ""}`}
+      >
+        {whySetup ? (
+          <div className="why-popup">
+            <div className={`why-action-strip ${whyFastItems[0]?.tone || "warning"}`}>
+              <div>
+                <span>Decision</span>
+                <b>{whyFastItems[0]?.status || "WAIT"}</b>
+                <small>{whyFastItems[0]?.note || "Waiting for final gate."}</small>
+              </div>
+              <div>
+                <span>Signal</span>
+                <b>{whyOption ? `${formatPrice(whyOption.strike)} ${whyOption.side}` : "No Strike"}</b>
+                <small>{whySetup.action || "-"}</small>
+              </div>
+              <div>
+                <span>Plan</span>
+                <b>{formatPremium(whySetup.plan?.entry)} / {formatPremium(whySetup.plan?.target)} / {formatPremium(whySetup.plan?.stoploss)}</b>
+                <small>Entry / Target / SL</small>
+              </div>
+              <div>
+                <span>Score</span>
+                <b>{formatNum(whySetup.score, 0)}</b>
+                <small>{whySetup.professionalGate?.label || "Checklist"}</small>
+              </div>
+            </div>
+            <div className="why-fast-grid">
+              {whyFastItems.slice(1).map((item) => (
+                <div className={`why-fast-card ${item.tone}`} key={item.label}>
+                  <span>{item.label}</span>
+                  <b>{item.status}</b>
+                  <small>{item.note}</small>
+                </div>
+              ))}
+            </div>
+            <div className="why-summary-container">
+              <div className={`why-summary ${whySetup.tone || "warning"}`}>
+                <div>
+                  <span className="metric-label">Signal</span>
+                  <b>{whyOption ? `${formatPrice(whyOption.strike)} ${whyOption.side}` : "No Strike"}</b>
+                  <small>{whySetup.noTradeReason || whySetup.action}</small>
+                </div>
+                <div>
+                  <span className="metric-label">Score</span>
+                  <b>{formatNum(whySetup.score, 0)}</b>
+                  <small>{whySetup.action}</small>
+                </div>
+                <div>
+                  <span className="metric-label">Plan</span>
+                  <b>{formatPremium(whySetup.plan?.entry)} / {formatPremium(whySetup.plan?.target)} / {formatPremium(whySetup.plan?.stoploss)}</b>
+                  <small>Entry / Target / SL</small>
+                </div>
+              </div>
+              <div className="why-verdict-grid">
+                {verdictItems.map((item) => (
+                  <div className={`why-verdict-card ${item.tone}`} key={item.label}>
+                    <div className="verdict-header">
+                      <span>{item.label}</span>
+                      <Tag 
+                        color={item.tone} 
+                        icon={item.tone === 'success' ? <CheckCircleFilled /> : item.tone === 'error' ? <CloseCircleFilled /> : <ExclamationCircleFilled />}
+                        style={{ fontWeight: 'bold' }}
+                      >
+                        {item.status}
+                      </Tag>
+                    </div>
+                    <p>{item.note}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            <div className="why-grouped-sections">
+              {whyGroups.map(group => {
+                // Move warning/errors to the top inside each group so they stand out
+                const sortedItems = [...group.items].sort((a, b) => {
+                  const val = (t) => t === 'error' ? 3 : t === 'warning' ? 2 : 1;
+                  return val(b.tone) - val(a.tone);
+                });
+
+                return (
+                  <div key={group.title} className="why-group-section">
+                    <h4 className="why-group-title">{group.title}</h4>
+                    <div className="why-grid">
+                      {sortedItems.map((item) => (
+                        <div className={`why-check ${item.tone}`} key={item.label}>
+                          <div>
+                            <span>{item.label}</span>
+                            <Tag color={item.tone}>{item.status}</Tag>
+                          </div>
+                          <p>{item.note}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="why-details-grid">
+              <div><span>PCR</span><b>{formatNum(whySetup.pcr, 2)}</b></div>
+              <div><span>OI</span><b>{formatInt(whyOption?.oi)}</b></div>
+              <div><span>OI Chg</span><b>{formatInt(whyOption?.oiChange)}</b></div>
+              <div><span>IV</span><b>{formatNum(whyOption?.iv, 2)}</b></div>
+              <div><span>Delta</span><b>{formatNum(whyOption?.delta, 2)}</b></div>
+              <div><span>Theta</span><b>{formatNum(whyOption?.theta, 2)}</b></div>
+            </div>
+            {whySetup.warnings?.length ? (
+              <div className="why-warning-list">
+                {whySetup.warnings.slice(0, 6).map((item) => <Tag color="warning" key={item}>{item}</Tag>)}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <Empty description="No setup details yet" />
+        )}
+      </Modal>
+    </SectionCard>
+  );
+}
+

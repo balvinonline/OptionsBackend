@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="hi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>एमएसटीपीएल चेकगेट मूल्य प्रस्ताव</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="quotation_generator.css" rel="stylesheet">
+  </head>
+  <body>
+    <div class="app-shell">
+      <!-- Application toolbar -->
+      <header class="app-header no-print">
+        <div class="container-fluid">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+            <div class="d-flex align-items-center gap-3">
+              <div>
+                <p class="eyebrow mb-1">एमएसटीपीएल जिला चेकगेट कार्यादेश सहायता</p>
+                <h1 class="app-title mb-0">मूल्य प्रस्ताव</h1>
+              </div>
+            </div>
+            <div class="toolbar d-flex flex-wrap gap-2">
+              <button class="btn btn-light btn-sm" type="button" id="saveDraftBtn" title="ड्राफ्ट सेव करें">
+                <i class="bi bi-save"></i><span>ड्राफ्ट सेव</span>
+              </button>
+              <button class="btn btn-outline-light btn-sm" type="button" id="loadDraftBtn" title="ड्राफ्ट लोड करें">
+                <i class="bi bi-folder2-open"></i><span>ड्राफ्ट लोड</span>
+              </button>
+              <button class="btn btn-warning btn-sm" type="button" id="generateBtn" title="मूल्य प्रस्ताव बनाएं">
+                <i class="bi bi-file-earmark-text"></i><span>प्रस्ताव बनाएं</span>
+              </button>
+              <button class="btn btn-success btn-sm" type="button" id="printBtn" title="प्रिंट">
+                <i class="bi bi-printer"></i><span>प्रिंट</span>
+              </button>
+              <button class="btn btn-primary btn-sm" type="button" id="pdfBtn" title="पीडीएफ निर्यात">
+                <i class="bi bi-filetype-pdf"></i><span>पीडीएफ</span>
+              </button>
+              <button class="btn btn-outline-light btn-sm" type="button" id="resetBtn" title="रीसेट">
+                <i class="bi bi-arrow-counterclockwise"></i><span>रीसेट</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="container-fluid py-4">
+        <div class="row g-4">
+          <!-- Quotation form panels -->
+          <section class="col-12 no-print">
+            <form id="quotationForm" class="details-card-grid" autocomplete="off">
+              <div class="card govt-card">
+                <div class="card-header">
+                  <i class="bi bi-journal-text"></i>
+                  <span>प्रस्ताव संदर्भ</span>
+                </div>
+                <div class="card-body">
+                  <div class="row g-3">
+                    <div class="col-md-6">
+                      <label class="form-label" for="referenceNumber">संदर्भ संख्या</label>
+                      <input class="form-control" id="referenceNumber" name="referenceNumber" type="text" placeholder="एमएसटीपीएल/सीजी/2026/001">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="quotationNumber">प्रस्ताव संख्या</label>
+                      <input class="form-control" id="quotationNumber" name="quotationNumber" type="text" placeholder="प्रस्ताव-सीजी-001">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="quotationDate">प्रस्ताव दिनांक</label>
+                      <input class="form-control" id="quotationDate" name="quotationDate" type="date">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="tenderReferenceNumber">निविदा संदर्भ संख्या</label>
+                      <input class="form-control" id="tenderReferenceNumber" name="tenderReferenceNumber" type="text">
+                    </div>
+                    <div class="col-12">
+                      <label class="form-label" for="tenderName">निविदा का नाम</label>
+                      <input class="form-control" id="tenderName" name="tenderName" type="text" placeholder="चेकगेट संचालन एवं रखरखाव">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card govt-card">
+                <div class="card-header">
+                  <i class="bi bi-geo-alt"></i>
+                  <span>जिला एवं चेकगेट विवरण</span>
+                </div>
+                <div class="card-body">
+                  <div class="row g-3">
+                    <div class="col-md-6">
+                      <label class="form-label" for="districtName">जिला नाम</label>
+                      <input class="form-control" id="districtName" name="districtName" type="text" placeholder="लखनऊ">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="checkgateCount">कुल चेकगेट</label>
+                      <input class="form-control" id="checkgateCount" name="checkgateCount" type="number" min="1" step="1" value="1">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="miningOffice">खनन कार्यालय</label>
+                      <input class="form-control" id="miningOffice" name="miningOffice" type="text" placeholder="जिला खनन कार्यालय">
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label" for="division">मंडल</label>
+                      <input class="form-control" id="division" name="division" type="text">
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label" for="stateName">राज्य</label>
+                      <input class="form-control" id="stateName" name="stateName" type="text" value="Uttar Pradesh">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card govt-card">
+                <div class="card-header">
+                  <i class="bi bi-calendar2-check"></i>
+                  <span>अवधि विवरण</span>
+                </div>
+                <div class="card-body">
+                  <div class="row g-3">
+                    <div class="col-md-6">
+                      <label class="form-label" for="quotationPeriod">एएमसी अवधि</label>
+                      <input class="form-control" id="quotationPeriod" name="quotationPeriod" type="text" placeholder="वार्षिक / कस्टम">
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label" for="fromDate">एएमसी प्रारंभ</label>
+                      <input class="form-control" id="fromDate" name="fromDate" type="date">
+                    </div>
+                    <div class="col-md-3">
+                      <label class="form-label" for="toDate">एएमसी समाप्ति</label>
+                      <input class="form-control" id="toDate" name="toDate" type="date">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="warrantyFromDate">वारंटी प्रारंभ</label>
+                      <input class="form-control" id="warrantyFromDate" name="warrantyFromDate" type="date">
+                    </div>
+                    <div class="col-md-6">
+                      <label class="form-label" for="warrantyToDate">वारंटी समाप्ति</label>
+                      <input class="form-control" id="warrantyToDate" name="warrantyToDate" type="date">
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </form>
+          </section>
+
+          <!-- Item editor, summary and generated quotation preview -->
+          <section class="col-12">
+            <div class="card govt-card mb-4 no-print">
+              <div class="card-header d-flex flex-wrap justify-content-between gap-2">
+                <div>
+                  <i class="bi bi-list-check"></i>
+                  <span>जिला कार्यादेश हेतु दर मदें</span>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                  <button class="btn btn-primary btn-sm" type="button" id="addItemBtn">
+                    <i class="bi bi-plus-circle"></i><span>मद जोड़ें</span>
+                  </button>
+                  <button class="btn btn-outline-primary btn-sm" type="button" id="duplicateItemBtn">
+                    <i class="bi bi-files"></i><span>कॉपी करें</span>
+                  </button>
+                  <button class="btn btn-outline-danger btn-sm" type="button" id="deleteItemBtn">
+                    <i class="bi bi-trash3"></i><span>हटाएं</span>
+                  </button>
+                </div>
+              </div>
+              <div class="card-body p-0">
+                <div class="table-responsive item-table-wrap">
+                  <table class="table table-bordered align-middle item-table mb-0" id="itemsInputTable">
+                    <thead>
+                      <tr>
+                        <th>क्र.सं.</th>
+                        <th>लाइन आइटम</th>
+                        <th>प्रति चेकगेट मात्रा</th>
+                        <th>दर / लागत</th>
+                        <th>कुल मात्रा</th>
+                        <th>बेस राशि</th>
+                        <th>यूपीडेस्को 10%</th>
+                        <th>जीएसटी 18%</th>
+                        <th>अंतिम लागत</th>
+                        <th>टिप्पणी</th>
+                      </tr>
+                    </thead>
+                    <tbody id="itemsBody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="card govt-card mb-4 no-print">
+              <div class="card-header">
+                <i class="bi bi-calculator"></i>
+                <span>कार्यादेश राशि सारांश</span>
+              </div>
+              <div class="card-body">
+                <div class="row g-3 summary-grid" id="liveSummary"></div>
+              </div>
+            </div>
+
+            <article class="quotation-paper" id="quotationPrintArea">
+              <header class="proposal-header">
+                <div class="proposal-brand-row">
+                  <div>
+                    <p class="proposal-kicker">जिला चेकगेट कार्यादेश राशि प्रस्ताव</p>
+                    <h2>मूल्य प्रस्ताव</h2>
+                    <p class="proposal-subtitle">जिला चेकगेट संचालन हेतु वित्तीय प्रस्ताव</p>
+                  </div>
+                </div>
+              </header>
+
+              <section class="proposal-note">
+                यह प्रस्ताव निविदा आवश्यकताओं के अनुसार चेकगेट संचालन हेतु जिला स्तर पर कार्यादेश राशि निर्धारित करने के लिए तैयार किया गया है।
+              </section>
+
+              <section class="proposal-meta">
+                <div><span>संदर्भ संख्या</span><strong data-preview="referenceNumber">-</strong></div>
+                <div><span>प्रस्ताव संख्या</span><strong data-preview="quotationNumber">-</strong></div>
+                <div><span>प्रस्ताव दिनांक</span><strong data-preview="quotationDateFormatted">-</strong></div>
+                <div><span>निविदा संदर्भ संख्या</span><strong data-preview="tenderReferenceNumber">-</strong></div>
+                <div class="wide"><span>निविदा का नाम</span><strong data-preview="tenderName">-</strong></div>
+              </section>
+
+              <section class="proposal-section">
+                <h3>जिला एवं अवधि विवरण</h3>
+                <div class="detail-grid">
+                  <div><span>जिला नाम</span><strong data-preview="districtName">-</strong></div>
+                  <div><span>कुल चेकगेट</span><strong data-preview="checkgateCount">1</strong></div>
+                  <div><span>खनन कार्यालय</span><strong data-preview="miningOffice">-</strong></div>
+                  <div><span>मंडल</span><strong data-preview="division">-</strong></div>
+                  <div><span>राज्य</span><strong data-preview="stateName">उत्तर प्रदेश</strong></div>
+                  <div><span>एएमसी अवधि</span><strong data-preview="quotationPeriod">-</strong></div>
+                  <div><span>एएमसी प्रारंभ</span><strong data-preview="fromDateFormatted">-</strong></div>
+                  <div><span>एएमसी समाप्ति</span><strong data-preview="toDateFormatted">-</strong></div>
+                  <div><span>वारंटी प्रारंभ</span><strong data-preview="warrantyFromDateFormatted">-</strong></div>
+                  <div><span>वारंटी समाप्ति</span><strong data-preview="warrantyToDateFormatted">-</strong></div>
+                </div>
+              </section>
+
+              <section class="proposal-section">
+                <h3>दर मदें</h3>
+                <div class="table-responsive print-table-wrap">
+                  <table class="table table-bordered proposal-table mb-0">
+                    <thead>
+                      <tr>
+                        <th>क्र.सं.</th>
+                        <th>लाइन आइटम</th>
+                        <th>प्रति चेकगेट मात्रा</th>
+                        <th>कुल मात्रा</th>
+                        <th>दर</th>
+                        <th>बेस राशि</th>
+                        <th>यूपीडेस्को 10%</th>
+                        <th>जीएसटी 18%</th>
+                        <th>अंतिम लागत</th>
+                      </tr>
+                    </thead>
+                    <tbody id="quotationItemsBody"></tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section class="proposal-section avoid-break">
+                <h3>सारांश</h3>
+                <div class="summary-print-grid">
+                  <div><span>एएमसी कुल</span><strong id="printAmcTotal">रु. 0.00</strong></div>
+                  <div><span>अनिवार्य हार्डवेयर कुल</span><strong id="printHardwareTotal">रु. 0.00</strong></div>
+                  <div><span>मैनपावर कुल</span><strong id="printManpowerTotal">रु. 0.00</strong></div>
+                  <div><span>सर्वर स्पेस कुल</span><strong id="printServerTotal">रु. 0.00</strong></div>
+                  <div><span>बेस राशि</span><strong id="printGrandTotal">रु. 0.00</strong></div>
+                  <div><span>यूपीडेस्को 10%</span><strong id="printUpdescoTotal">रु. 0.00</strong></div>
+                  <div><span>जीएसटी 18%</span><strong id="printGstTotal">रु. 0.00</strong></div>
+                  <div class="highlight"><span>अंतिम कार्यादेश राशि</span><strong id="printGrandWithGst">रु. 0.00</strong></div>
+                </div>
+                <div class="amount-words">
+                  <span>राशि शब्दों में</span>
+                  <strong id="amountWords">रुपये शून्य मात्र</strong>
+                </div>
+              </section>
+
+              <section class="proposal-section declaration avoid-break">
+                <h3>घोषणा</h3>
+                <p>"यह मूल्य प्रस्ताव संबंधित ई-निविदा/कार्यादेश की शर्तों एवं विनिर्देशों के अनुरूप तैयार किया गया है तथा उल्लिखित दरें संस्था द्वारा प्रस्तावित हैं।"</p>
+              </section>
+
+              <footer class="proposal-footer">
+                <span>जनरेट दिनांक व समय: <strong id="generatedDateTime">-</strong></span>
+                <span>संदर्भ संख्या: <strong data-preview="footerReferenceNumber">-</strong></span>
+              </footer>
+            </article>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <!-- Shared row options and status toast -->
+    <datalist id="itemNameOptions"></datalist>
+
+    <div class="toast-container position-fixed bottom-0 end-0 p-3 no-print">
+      <div class="toast align-items-center text-bg-primary border-0" id="appToast" role="status" aria-live="polite" aria-atomic="true">
+        <div class="d-flex">
+          <div class="toast-body" id="toastMessage">Done</div>
+          <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="quotation_generator.js"></script>
+  </body>
+</html>

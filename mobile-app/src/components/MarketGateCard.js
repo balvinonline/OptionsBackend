@@ -1,9 +1,12 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
 export const MarketGateCard = ({ signalAnalysis }) => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
+
   if (!signalAnalysis) return null;
 
   const { gateStatus, pcr, confidence, totalCeOiChg, totalPeOiChg, trapWarning, absorptionDetected } = signalAnalysis;
@@ -19,14 +22,14 @@ export const MarketGateCard = ({ signalAnalysis }) => {
           <Ionicons
             name={isBullish ? 'shield-checkmark' : isBearish ? 'alert-circle' : 'pause-circle'}
             size={20}
-            color={isBullish ? THEME.colors.bullish : isBearish ? THEME.colors.bearish : THEME.colors.warning}
+            color={isBullish ? theme.colors.bullish : isBearish ? theme.colors.bearish : theme.colors.warning}
           />
           <Text style={styles.headerTitle}>
             TRADE GATE: {isBullish ? 'BULLISH (CE PERMITTED)' : isBearish ? 'BEARISH (PE PERMITTED)' : 'NO TRADE GATE / CHOPPY'}
           </Text>
         </View>
 
-        <View style={[styles.scoreBadge, { backgroundColor: isBullish ? THEME.colors.bullish : isBearish ? THEME.colors.bearish : THEME.colors.warning }]}>
+        <View style={[styles.scoreBadge, { backgroundColor: isBullish ? theme.colors.bullish : isBearish ? theme.colors.bearish : theme.colors.warning }]}>
           <Text style={styles.scoreText}>{confidence}% CONFIDENCE</Text>
         </View>
       </View>
@@ -58,39 +61,43 @@ export const MarketGateCard = ({ signalAnalysis }) => {
   );
 };
 
-const CheckItem = ({ passed, label, isWarning, isSpecial }) => (
-  <View style={styles.checkRow}>
-    <Ionicons
-      name={isWarning ? 'warning' : passed ? 'checkmark-circle' : 'close-circle'}
-      size={16}
-      color={isWarning ? THEME.colors.warning : passed ? THEME.colors.bullish : THEME.colors.textMuted}
-    />
-    <Text style={[styles.checkLabel, isSpecial && { color: THEME.colors.primaryLight, fontWeight: '800' }]}>
-      {label}
-    </Text>
-  </View>
-);
+const CheckItem = ({ passed, label, isWarning, isSpecial }) => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
+  return (
+    <View style={styles.checkRow}>
+      <Ionicons
+        name={isWarning ? 'warning' : passed ? 'checkmark-circle' : 'close-circle'}
+        size={16}
+        color={isWarning ? theme.colors.warning : passed ? theme.colors.bullish : theme.colors.textMuted}
+      />
+      <Text style={[styles.checkLabel, isSpecial && { color: theme.colors.primaryLight, fontWeight: '800' }]}>
+        {label}
+      </Text>
+    </View>
+  );
+};
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   container: {
     marginHorizontal: 14,
     marginTop: 12,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
-    ...THEME.shadows.card,
+    ...theme.shadows.card,
   },
   containerBullish: {
     backgroundColor: 'rgba(16, 185, 129, 0.08)',
-    borderColor: THEME.colors.bullishBorder,
+    borderColor: theme.colors.bullishBorder,
   },
   containerBearish: {
     backgroundColor: 'rgba(239, 68, 68, 0.08)',
-    borderColor: THEME.colors.bearishBorder,
+    borderColor: theme.colors.bearishBorder,
   },
   containerNeutral: {
-    backgroundColor: THEME.colors.bgCardSolid,
-    borderColor: THEME.colors.border,
+    backgroundColor: theme.colors.bgCardSolid,
+    borderColor: theme.colors.border,
   },
   header: {
     flexDirection: 'row',
@@ -99,7 +106,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     paddingBottom: 8,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.borderLight,
+    borderBottomColor: theme.colors.borderLight,
   },
   headerTitleRow: {
     flexDirection: 'row',
@@ -108,7 +115,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerTitle: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
     flexShrink: 1,
@@ -132,7 +139,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   checkLabel: {
-    color: THEME.colors.textSecondary,
+    color: theme.colors.textSecondary,
     fontSize: 11,
     fontWeight: '600',
     flex: 1,

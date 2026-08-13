@@ -1,16 +1,51 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
-export const OptionChainRow = ({ row, isATM, maxOi }) => {
+export const OptionChainRow = React.memo(({ row, isATM, maxOi }) => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
   const strike = Number(row.strike);
   const ceOi = Number(row.oi_CE || 0);
   const ceOiChg = Number(row.oich_CE || 0);
   const ceLtp = Number(row.ltp_CE || 0);
+  const ceIv = Number(row.iv_CE || row.ce_iv || 0);
 
   const peOi = Number(row.oi_PE || 0);
   const peOiChg = Number(row.oich_PE || 0);
   const peLtp = Number(row.ltp_PE || 0);
+  const peIv = Number(row.iv_PE || row.pe_iv || 0);
+
+  const [ceFlash, setCeFlash] = useState(null); // 'up' or 'down'
+  const [peFlash, setPeFlash] = useState(null); // 'up' or 'down'
+  
+  const prevCeLtp = useRef(ceLtp);
+  const prevPeLtp = useRef(peLtp);
+
+  useEffect(() => {
+    if (ceLtp > prevCeLtp.current) {
+      setCeFlash('up');
+      setTimeout(() => setCeFlash(null), 300);
+    } else if (ceLtp < prevCeLtp.current) {
+      setCeFlash('down');
+      setTimeout(() => setCeFlash(null), 300);
+    }
+    prevCeLtp.current = ceLtp;
+  }, [ceLtp]);
+
+  useEffect(() => {
+    if (peLtp > prevPeLtp.current) {
+      setPeFlash('up');
+      setTimeout(() => setPeFlash(null), 300);
+    } else if (peLtp < prevPeLtp.current) {
+      setPeFlash('down');
+      setTimeout(() => setPeFlash(null), 300);
+    }
+    prevPeLtp.current = peLtp;
+  }, [peLtp]);
+
+  const ceFlashStyle = ceFlash === 'up' ? styles.flashUp : ceFlash === 'down' ? styles.flashDown : null;
+  const peFlashStyle = peFlash === 'up' ? styles.flashUp : peFlash === 'down' ? styles.flashDown : null;
 
   const ceBarWidth = maxOi > 0 ? Math.min(100, (ceOi / maxOi) * 100) : 0;
   const peBarWidth = maxOi > 0 ? Math.min(100, (peOi / maxOi) * 100) : 0;
@@ -26,14 +61,16 @@ export const OptionChainRow = ({ row, isATM, maxOi }) => {
     <View style={[styles.row, isATM && styles.atmRow]}>
       {/* CALL SIDE */}
       <View style={styles.sideColumn}>
-        {/* Visual OI Bar Background */}
         <View style={[styles.ceOiBar, { width: `${ceBarWidth}%` }]} />
         <View style={styles.cellContent}>
-          <Text style={[styles.oiText, { color: THEME.colors.bearish }]}>{formatCompact(ceOi)}</Text>
-          <Text style={[styles.oiChgText, ceOiChg >= 0 ? styles.positiveChg : styles.negativeChg]}>
-            {ceOiChg > 0 ? `+${formatCompact(ceOiChg)}` : formatCompact(ceOiChg)}
-          </Text>
-          <Text style={styles.ltpText}>₹{ceLtp.toFixed(1)}</Text>
+          <Text style={[styles.oiText, { color: theme.colors.bearish }]}>{formatCompact(ceOi)}</Text>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.oiChgText, ceOiChg >= 0 ? styles.positiveChg : styles.negativeChg]}>
+              {ceOiChg > 0 ? `+${formatCompact(ceOiChg)}` : formatCompact(ceOiChg)}
+            </Text>
+            {ceIv > 0 && <Text style={styles.ivText}>IV: {ceIv.toFixed(1)}</Text>}
+          </View>
+          <Text style={[styles.ltpText, ceFlashStyle]}>₹{ceLtp.toFixed(1)}</Text>
         </View>
       </View>
 
@@ -45,34 +82,36 @@ export const OptionChainRow = ({ row, isATM, maxOi }) => {
 
       {/* PUT SIDE */}
       <View style={styles.sideColumn}>
-        {/* Visual OI Bar Background */}
         <View style={[styles.peOiBar, { width: `${peBarWidth}%` }]} />
         <View style={[styles.cellContent, { justifyContent: 'flex-end' }]}>
-          <Text style={styles.ltpText}>₹{peLtp.toFixed(1)}</Text>
-          <Text style={[styles.oiChgText, peOiChg >= 0 ? styles.positiveChg : styles.negativeChg]}>
-            {peOiChg > 0 ? `+${formatCompact(peOiChg)}` : formatCompact(peOiChg)}
-          </Text>
-          <Text style={[styles.oiText, { color: THEME.colors.bullish }]}>{formatCompact(peOi)}</Text>
+          <Text style={[styles.ltpText, peFlashStyle]}>₹{peLtp.toFixed(1)}</Text>
+          <View style={{ alignItems: 'flex-start' }}>
+            <Text style={[styles.oiChgText, peOiChg >= 0 ? styles.positiveChg : styles.negativeChg]}>
+              {peOiChg > 0 ? `+${formatCompact(peOiChg)}` : formatCompact(peOiChg)}
+            </Text>
+            {peIv > 0 && <Text style={styles.ivText}>IV: {peIv.toFixed(1)}</Text>}
+          </View>
+          <Text style={[styles.oiText, { color: theme.colors.bullish }]}>{formatCompact(peOi)}</Text>
         </View>
       </View>
     </View>
   );
-};
+});
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     height: 44,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.borderLight,
-    backgroundColor: THEME.colors.bgDark,
+    borderBottomColor: theme.colors.borderLight,
+    backgroundColor: theme.colors.bgDark,
   },
   atmRow: {
     backgroundColor: 'rgba(56, 189, 248, 0.08)',
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: THEME.colors.primary,
+    borderColor: theme.colors.primary,
   },
   sideColumn: {
     flex: 1,
@@ -108,18 +147,22 @@ const styles = StyleSheet.create({
     width: 42,
   },
   oiChgText: {
-    fontSize: 10,
-    fontWeight: '600',
-    width: 38,
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  ivText: {
+    fontSize: 8,
+    color: theme.colors.textMuted,
+    marginTop: 2,
   },
   positiveChg: {
-    color: THEME.colors.bullish,
+    color: theme.colors.bullish,
   },
   negativeChg: {
-    color: THEME.colors.bearish,
+    color: theme.colors.bearish,
   },
   ltpText: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
     minWidth: 46,
@@ -127,18 +170,18 @@ const styles = StyleSheet.create({
   strikeCenter: {
     width: 76,
     height: '100%',
-    backgroundColor: THEME.colors.bgCardElevated,
+    backgroundColor: theme.colors.bgCardElevated,
     justifyContent: 'center',
     alignItems: 'center',
     borderLeftWidth: 1,
     borderRightWidth: 1,
-    borderColor: THEME.colors.border,
+    borderColor: theme.colors.border,
   },
   atmStrikeCenter: {
-    backgroundColor: THEME.colors.primary,
+    backgroundColor: theme.colors.primary,
   },
   strikeText: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
   },
@@ -151,5 +194,17 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '900',
     marginTop: -2,
+  },
+  flashUp: {
+    backgroundColor: 'rgba(16, 185, 129, 0.4)',
+    color: '#fff',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  flashDown: {
+    backgroundColor: 'rgba(239, 68, 68, 0.4)',
+    color: '#fff',
+    borderRadius: 4,
+    overflow: 'hidden',
   },
 });

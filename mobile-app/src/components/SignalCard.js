@@ -1,9 +1,12 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
 export const SignalCard = ({ signalAnalysis, indexSymbol }) => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
+
   if (!signalAnalysis) return null;
 
   const { signalType, signalStrength, confidence, atmStrike } = signalAnalysis;
@@ -13,7 +16,7 @@ export const SignalCard = ({ signalAnalysis, indexSymbol }) => {
   if (signalType === 'NEUTRAL') {
     return (
       <View style={styles.neutralContainer}>
-        <Ionicons name="hourglass-outline" size={20} color={THEME.colors.textMuted} />
+        <Ionicons name="hourglass-outline" size={20} color={theme.colors.textMuted} />
         <View style={{ flex: 1 }}>
           <Text style={styles.neutralTitle}>NO CONFIRMED SIGNAL YET</Text>
           <Text style={styles.neutralSubtitle}>Waiting for clear momentum & PCR divergence on {indexSymbol}</Text>
@@ -29,7 +32,7 @@ export const SignalCard = ({ signalAnalysis, indexSymbol }) => {
     <View style={[styles.container, isBuy ? styles.containerBuy : styles.containerSell]}>
       {/* Top Tag & Confidence */}
       <View style={styles.topRow}>
-        <View style={[styles.signalPill, { backgroundColor: isBuy ? THEME.colors.bullish : THEME.colors.bearish }]}>
+        <View style={[styles.signalPill, { backgroundColor: isBuy ? theme.colors.bullish : theme.colors.bearish }]}>
           <Ionicons name={isBuy ? 'trending-up' : 'trending-down'} size={14} color="#fff" />
           <Text style={styles.signalPillText}>{signalStrength}</Text>
         </View>
@@ -47,7 +50,7 @@ export const SignalCard = ({ signalAnalysis, indexSymbol }) => {
       <View style={styles.levelsRow}>
         <View style={styles.levelTile}>
           <Text style={styles.levelLabel}>CONFIDENCE</Text>
-          <Text style={[styles.levelVal, { color: isBuy ? THEME.colors.bullish : THEME.colors.bearish }]}>{confidence}%</Text>
+          <Text style={[styles.levelVal, { color: isBuy ? theme.colors.bullish : theme.colors.bearish }]}>{confidence}%</Text>
         </View>
 
         <View style={styles.levelTile}>
@@ -57,49 +60,49 @@ export const SignalCard = ({ signalAnalysis, indexSymbol }) => {
 
         <View style={styles.levelTile}>
           <Text style={styles.levelLabel}>SL GUIDE</Text>
-          <Text style={[styles.levelVal, { color: THEME.colors.warning }]}>-20% / VWAP</Text>
+          <Text style={[styles.levelVal, { color: theme.colors.warning }]}>-20% / VWAP</Text>
         </View>
       </View>
     </View>
   );
 };
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   container: {
     marginHorizontal: 14,
     marginTop: 12,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1.5,
-    ...THEME.shadows.glow,
+    ...theme.shadows.glow,
   },
   containerBuy: {
     backgroundColor: '#07241c',
-    borderColor: THEME.colors.bullish,
+    borderColor: theme.colors.bullish,
   },
   containerSell: {
     backgroundColor: '#281116',
-    borderColor: THEME.colors.bearish,
+    borderColor: theme.colors.bearish,
   },
   neutralContainer: {
     marginHorizontal: 14,
     marginTop: 12,
     borderRadius: 16,
     padding: 14,
-    backgroundColor: THEME.colors.bgCardSolid,
+    backgroundColor: theme.colors.bgCardSolid,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
   neutralTitle: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 12,
     fontWeight: '800',
   },
   neutralSubtitle: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     marginTop: 2,
   },
@@ -124,7 +127,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   timestampText: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
   },
   instrumentSection: {
@@ -134,12 +137,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   instrumentLabel: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 10,
     fontWeight: '800',
   },
   instrumentValue: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 17,
     fontWeight: '900',
     marginTop: 2,
@@ -157,12 +160,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   levelLabel: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 9,
     fontWeight: '700',
   },
   levelVal: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '900',
     marginTop: 2,

@@ -3,9 +3,11 @@ import { StyleSheet, Text, TouchableOpacity, View, ScrollView } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { SUPPORTED_INDEXES, useMarket } from '../context/MarketContext';
 import { MarketTape } from './MarketTape';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
 export const IndexHeader = ({ onOpenSettings }) => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
   const { selectedIndex, setSelectedIndex, isConnected, lastUpdated, refresh, isRefreshing } = useMarket();
 
   return (
@@ -13,13 +15,13 @@ export const IndexHeader = ({ onOpenSettings }) => {
       {/* Top status bar row */}
       <View style={styles.topRow}>
         <View style={styles.branding}>
-          <Ionicons name="stats-chart" size={18} color={THEME.colors.primary} />
+          <Ionicons name="stats-chart" size={18} color={theme.colors.primary} />
           <Text style={styles.brandTitle}>OPTIONS DESK</Text>
         </View>
 
         <View style={styles.statusGroup}>
           <View style={styles.connectionBadge}>
-            <View style={[styles.dot, { backgroundColor: isConnected ? THEME.colors.bullish : THEME.colors.bearish }]} />
+            <View style={[styles.dot, { backgroundColor: isConnected ? theme.colors.bullish : theme.colors.bearish }]} />
             <Text style={styles.statusText}>{isConnected ? 'LIVE' : 'OFFLINE'}</Text>
           </View>
 
@@ -28,12 +30,12 @@ export const IndexHeader = ({ onOpenSettings }) => {
           ) : null}
 
           <TouchableOpacity onPress={refresh} style={styles.iconBtn} disabled={isRefreshing}>
-            <Ionicons name="refresh" size={16} color={isRefreshing ? THEME.colors.primary : THEME.colors.textSecondary} />
+            <Ionicons name="refresh" size={16} color={isRefreshing ? theme.colors.primary : theme.colors.textSecondary} />
           </TouchableOpacity>
 
           {onOpenSettings ? (
             <TouchableOpacity onPress={onOpenSettings} style={styles.iconBtn}>
-              <Ionicons name="settings-outline" size={16} color={THEME.colors.textSecondary} />
+              <Ionicons name="settings-outline" size={16} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           ) : null}
         </View>
@@ -50,7 +52,14 @@ export const IndexHeader = ({ onOpenSettings }) => {
             <TouchableOpacity
               key={idx}
               style={[styles.pill, isActive && styles.pillActive]}
-              onPress={() => setSelectedIndex(idx)}
+              onPress={() => {
+                // In a heavy app, deferring the global state update prevents button press lag
+                requestAnimationFrame(() => {
+                  setTimeout(() => {
+                    setSelectedIndex(idx);
+                  }, 0);
+                });
+              }}
               activeOpacity={0.7}
             >
               <Text style={[styles.pillText, isActive && styles.pillTextActive]}>{idx}</Text>
@@ -62,11 +71,11 @@ export const IndexHeader = ({ onOpenSettings }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   container: {
-    backgroundColor: THEME.colors.bgDark,
+    backgroundColor: theme.colors.bgDark,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.borderLight,
+    borderBottomColor: theme.colors.borderLight,
     paddingTop: 8,
     paddingBottom: 10,
   },
@@ -83,7 +92,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   brandTitle: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontWeight: '900',
     fontSize: 15,
     letterSpacing: 0.8,
@@ -96,7 +105,7 @@ const styles = StyleSheet.create({
   connectionBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 12,
@@ -108,17 +117,17 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   statusText: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 10,
     fontWeight: '800',
   },
   timeText: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
   },
   iconBtn: {
     padding: 5,
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderRadius: 8,
   },
   pillsContainer: {
@@ -130,16 +139,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 20,
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   pillActive: {
-    backgroundColor: THEME.colors.primary,
-    borderColor: THEME.colors.primary,
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
   },
   pillText: {
-    color: THEME.colors.textSecondary,
+    color: theme.colors.textSecondary,
     fontSize: 12,
     fontWeight: '700',
   },

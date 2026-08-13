@@ -24,6 +24,19 @@ export const AuthProvider = ({ children }) => {
           setCurrentUser(user);
         }
         setIsAuthenticated(true);
+
+        // Auto-wake Render backend if we have a cached Fyers token
+        try {
+          const { default: AsyncStorage } = require('@react-native-async-storage/async-storage');
+          const cachedToken = await AsyncStorage.getItem('FYERS_CACHED_TOKEN');
+          if (cachedToken && storedUrl) {
+            await fetch(`${storedUrl}/api/fyers/save-token`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accessToken: cachedToken })
+            });
+          }
+        } catch(e) {}
       } catch (e) {
         console.error('Init Auth error:', e);
       } finally {

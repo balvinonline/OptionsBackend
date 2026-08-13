@@ -3,16 +3,18 @@ import {
   StyleSheet,
   Text,
   View,
-  ScrollView,
   TouchableOpacity,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { useMarket } from '../context/MarketContext';
 import { ServerSettingsModal } from '../components/ServerSettingsModal';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
-export const ScannerScreen = ({ onNavigate }) => {
+export const ScannerScreen = ({ onNavigate, onNavigateDesk }) => {
   const { marketNews, marketStrip, sectorStocks, heavyweights } = useMarket();
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
   const [activeTab, setActiveTab] = useState('BUILDUP'); // BUILDUP, HEAVYWEIGHTS, SECTORS, NEWS
   const [buildupFilter, setBuildupFilter] = useState('LONG_BUILDUP');
   const [showSettings, setShowSettings] = useState(false);
@@ -51,11 +53,11 @@ export const ScannerScreen = ({ onNavigate }) => {
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerTitleRow}>
-          <Ionicons name="scan" size={20} color={THEME.colors.primary} />
+          <Ionicons name="scan" size={20} color={theme.colors.primary} />
           <Text style={styles.headerTitle}>SCANNERS & SECTORS</Text>
         </View>
         <TouchableOpacity onPress={() => setShowSettings(true)} style={styles.settingsBtn}>
-          <Ionicons name="settings-outline" size={18} color={THEME.colors.textSecondary} />
+          <Ionicons name="settings-outline" size={18} color={theme.colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
@@ -98,54 +100,55 @@ export const ScannerScreen = ({ onNavigate }) => {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <View style={{ flex: 1, paddingHorizontal: 14, paddingTop: 10 }}>
         {activeTab === 'BUILDUP' ? (
-          <>
-            {/* Buildup Category Filter Pills */}
-            <View style={styles.subPills}>
-              {[
-                { id: 'LONG_BUILDUP', label: 'Long Buildup', color: THEME.colors.bullish },
-                { id: 'SHORT_BUILDUP', label: 'Short Buildup', color: THEME.colors.bearish },
-                { id: 'SHORT_COVERING', label: 'Short Covering', color: THEME.colors.primary },
-                { id: 'LONG_UNWINDING', label: 'Long Unwinding', color: THEME.colors.warning },
-              ].map((pill) => {
-                const isActive = buildupFilter === pill.id;
-                return (
-                  <TouchableOpacity
-                    key={pill.id}
-                    style={[styles.subPill, isActive && { backgroundColor: pill.color, borderColor: pill.color }]}
-                    onPress={() => setBuildupFilter(pill.id)}
-                  >
-                    <Text style={[styles.subPillText, isActive && { color: '#071a26', fontWeight: '900' }]}>
-                      {pill.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* Stocks List */}
-            <View style={styles.cardList}>
-              {filteredStocks.map((s, idx) => (
-                <View key={idx} style={styles.stockCard}>
-                  <View style={styles.stockLeft}>
-                    <Text style={styles.stockSymbol}>{s.symbol}</Text>
-                    <Text style={styles.stockSub}>OI Chg: <Text style={{ color: THEME.colors.primary, fontWeight: '700' }}>{s.oiChg}</Text></Text>
-                  </View>
-                  <View style={styles.stockRight}>
-                    <Text style={styles.stockLtp}>{s.ltp}</Text>
-                    <Text style={[styles.stockChg, { color: String(s.chg).startsWith('+') ? THEME.colors.bullish : THEME.colors.bearish }]}>
-                      {s.chg}
-                    </Text>
-                  </View>
+          <FlashList
+            data={filteredStocks}
+            estimatedItemSize={75}
+            ListHeaderComponent={
+              <View style={styles.subPills}>
+                {[
+                  { id: 'LONG_BUILDUP', label: 'Long Buildup', color: theme.colors.bullish },
+                  { id: 'SHORT_BUILDUP', label: 'Short Buildup', color: theme.colors.bearish },
+                  { id: 'SHORT_COVERING', label: 'Short Covering', color: theme.colors.primary },
+                  { id: 'LONG_UNWINDING', label: 'Long Unwinding', color: theme.colors.warning },
+                ].map((pill) => {
+                  const isActive = buildupFilter === pill.id;
+                  return (
+                    <TouchableOpacity
+                      key={pill.id}
+                      style={[styles.subPill, isActive && { backgroundColor: pill.color, borderColor: pill.color }]}
+                      onPress={() => setBuildupFilter(pill.id)}
+                    >
+                      <Text style={[styles.subPillText, isActive && { color: '#071a26', fontWeight: '900' }]}>
+                        {pill.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            }
+            renderItem={({ item: s }) => (
+              <View style={[styles.stockCard, { marginBottom: 8 }]}>
+                <View style={styles.stockLeft}>
+                  <Text style={styles.stockSymbol}>{s.symbol}</Text>
+                  <Text style={styles.stockSub}>OI Chg: <Text style={{ color: theme.colors.primary, fontWeight: '700' }}>{s.oiChg}</Text></Text>
                 </View>
-              ))}
-            </View>
-          </>
+                <View style={styles.stockRight}>
+                  <Text style={styles.stockLtp}>{s.ltp}</Text>
+                  <Text style={[styles.stockChg, { color: String(s.chg).startsWith('+') ? theme.colors.bullish : theme.colors.bearish }]}>
+                    {s.chg}
+                  </Text>
+                </View>
+              </View>
+            )}
+          />
         ) : activeTab === 'HEAVYWEIGHTS' ? (
-          <View style={styles.cardList}>
-            {stocks.map((stock, idx) => (
-              <View key={idx} style={styles.heavyweightCard}>
+          <FlashList
+            data={stocks}
+            estimatedItemSize={70}
+            renderItem={({ item: stock }) => (
+              <TouchableOpacity style={[styles.heavyweightCard, { marginBottom: 8 }]} onPress={() => onNavigateDesk && onNavigateDesk(stock.symbol)}>
                 <View style={styles.hwLeft}>
                   <Text style={styles.hwSymbol}>{stock.symbol}</Text>
                   <View style={styles.hwCategoryBadge}>
@@ -154,60 +157,64 @@ export const ScannerScreen = ({ onNavigate }) => {
                 </View>
                 <View style={styles.hwRight}>
                   <Text style={styles.hwLtp}>{stock.ltp}</Text>
-                  <Text style={[styles.hwChg, { color: String(stock.chg).startsWith('+') ? THEME.colors.bullish : THEME.colors.bearish }]}>
+                  <Text style={[styles.hwChg, { color: String(stock.chg).startsWith('+') ? theme.colors.bullish : theme.colors.bearish }]}>
                     {stock.chg}
                   </Text>
                 </View>
-              </View>
-            ))}
-          </View>
+              </TouchableOpacity>
+            )}
+          />
         ) : activeTab === 'SECTORS' ? (
-          <View style={styles.sectorGrid}>
-            {sectors.map((sec, idx) => (
-              <View key={idx} style={styles.sectorCard}>
+          <FlashList
+            data={sectors}
+            estimatedItemSize={60}
+            numColumns={2}
+            renderItem={({ item: sec }) => (
+              <View style={[styles.sectorCard, { flex: 1, margin: 4 }]}>
                 <View style={styles.sectorTop}>
                   <Text style={styles.sectorName}>{sec.name || sec.symbol}</Text>
-                  <Text style={[styles.sectorChg, { color: sec.isBull !== false ? THEME.colors.bullish : THEME.colors.bearish }]}>
+                  <Text style={[styles.sectorChg, { color: sec.isBull !== false ? theme.colors.bullish : theme.colors.bearish }]}>
                     {sec.chg || '+0.0%'}
                   </Text>
                 </View>
                 <Text style={styles.sectorLtp}>{sec.ltp || '-'}</Text>
               </View>
-            ))}
-          </View>
+            )}
+          />
         ) : (
           /* Live News Tab */
-          <View style={styles.cardList}>
-            {marketNews && marketNews.length > 0 ? (
-              marketNews.map((news, idx) => (
-                <View key={idx} style={styles.newsCard}>
-                  <View style={styles.newsTopRow}>
-                    <Text style={styles.newsSource}>{news.source || 'Market Feed'}</Text>
-                    <Text style={styles.newsTime}>{news.time || 'Live'}</Text>
-                  </View>
-                  <Text style={styles.newsTitle}>{news.title || news.headline}</Text>
-                  {news.summary ? <Text style={styles.newsSummary}>{news.summary}</Text> : null}
-                </View>
-              ))
-            ) : (
+          <FlashList
+            data={marketNews || []}
+            estimatedItemSize={100}
+            ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <Ionicons name="newspaper-outline" size={32} color={THEME.colors.textMuted} />
+                <Ionicons name="newspaper-outline" size={32} color={theme.colors.textMuted} />
                 <Text style={styles.emptyText}>Fetching live market headlines...</Text>
               </View>
+            }
+            renderItem={({ item: news }) => (
+              <View style={[styles.newsCard, { marginBottom: 8 }]}>
+                <View style={styles.newsTopRow}>
+                  <Text style={styles.newsSource}>{news.source || 'Market Feed'}</Text>
+                  <Text style={styles.newsTime}>{news.time || 'Live'}</Text>
+                </View>
+                <Text style={styles.newsTitle}>{news.title || news.headline}</Text>
+                {news.summary ? <Text style={styles.newsSummary}>{news.summary}</Text> : null}
+              </View>
             )}
-          </View>
+          />
         )}
-      </ScrollView>
+      </View>
 
       <ServerSettingsModal visible={showSettings} onClose={() => setShowSettings(false)} />
     </View>
   );
 };
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.colors.bgDark,
+    backgroundColor: theme.colors.bgDark,
   },
   header: {
     flexDirection: 'row',
@@ -215,9 +222,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 14,
     paddingVertical: 10,
-    backgroundColor: THEME.colors.bgDark,
+    backgroundColor: theme.colors.bgDark,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.borderLight,
+    borderBottomColor: theme.colors.borderLight,
   },
   headerTitleRow: {
     flexDirection: 'row',
@@ -225,25 +232,25 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   headerTitle: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 0.5,
   },
   settingsBtn: {
     padding: 6,
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderRadius: 8,
   },
   mainTabs: {
     flexDirection: 'row',
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     padding: 4,
     marginHorizontal: 14,
     marginTop: 10,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   mainTab: {
     flex: 1,
@@ -252,10 +259,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   mainTabActive: {
-    backgroundColor: THEME.colors.primary,
+    backgroundColor: theme.colors.primary,
   },
   mainTabText: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     fontWeight: '700',
   },
@@ -277,12 +284,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 16,
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   subPillText: {
-    color: THEME.colors.textSecondary,
+    color: theme.colors.textSecondary,
     fontSize: 11,
     fontWeight: '700',
   },
@@ -293,20 +300,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     padding: 12,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   stockLeft: {},
   stockSymbol: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '900',
   },
   stockSub: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 10,
     marginTop: 2,
   },
@@ -314,7 +321,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   stockLtp: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '800',
   },
@@ -327,17 +334,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     padding: 12,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   hwLeft: {
     gap: 4,
   },
   hwSymbol: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '900',
   },
@@ -349,7 +356,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   hwCategoryText: {
-    color: THEME.colors.primary,
+    color: theme.colors.primary,
     fontSize: 9,
     fontWeight: '800',
   },
@@ -357,7 +364,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   hwLtp: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 13,
     fontWeight: '800',
   },
@@ -373,11 +380,11 @@ const styles = StyleSheet.create({
   },
   sectorCard: {
     width: '48%',
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderRadius: 10,
     padding: 12,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   sectorTop: {
     flexDirection: 'row',
@@ -386,7 +393,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   sectorName: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 11,
     fontWeight: '800',
     flex: 1,
@@ -396,16 +403,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   sectorLtp: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     fontVariant: ['tabular-nums'],
   },
   newsCard: {
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderRadius: 10,
     padding: 12,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   newsTopRow: {
     flexDirection: 'row',
@@ -413,22 +420,22 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   newsSource: {
-    color: THEME.colors.primary,
+    color: theme.colors.primary,
     fontSize: 10,
     fontWeight: '800',
   },
   newsTime: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 10,
   },
   newsTitle: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 12,
     fontWeight: '700',
     lineHeight: 16,
   },
   newsSummary: {
-    color: THEME.colors.textSecondary,
+    color: theme.colors.textSecondary,
     fontSize: 11,
     marginTop: 4,
     lineHeight: 15,
@@ -440,7 +447,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   emptyText: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 12,
   },
 });

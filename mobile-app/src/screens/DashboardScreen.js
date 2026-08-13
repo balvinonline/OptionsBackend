@@ -13,11 +13,14 @@ import { IndexHeader } from '../components/IndexHeader';
 import { KpiCard } from '../components/KpiCard';
 import { SignalCard } from '../components/SignalCard';
 import { MarketGateCard } from '../components/MarketGateCard';
-import { CandlestickChart } from '../components/CandlestickChart';
+import { AdvancedAnalyticsCard } from '../components/AdvancedAnalyticsCard';
+import { OiBarChart } from '../components/OiBarChart';
 import { ServerSettingsModal } from '../components/ServerSettingsModal';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
 export const DashboardScreen = ({ onNavigate }) => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
   const { selectedIndex, marketData, signalAnalysis, tradeGateAnalysis, atm, isRefreshing, refresh, error } = useMarket();
   const [showSettings, setShowSettings] = useState(false);
 
@@ -30,7 +33,7 @@ export const DashboardScreen = ({ onNavigate }) => {
 
       {error ? (
         <View style={styles.errorBanner}>
-          <Ionicons name="cloud-offline" size={16} color={THEME.colors.bearish} />
+          <Ionicons name="cloud-offline" size={16} color={theme.colors.bearish} />
           <Text style={styles.errorBannerText}>{error}</Text>
         </View>
       ) : null}
@@ -41,7 +44,7 @@ export const DashboardScreen = ({ onNavigate }) => {
           <RefreshControl
             refreshing={isRefreshing}
             onRefresh={refresh}
-            tintColor={THEME.colors.primary}
+            tintColor={theme.colors.primary}
           />
         }
       >
@@ -54,7 +57,7 @@ export const DashboardScreen = ({ onNavigate }) => {
             style={styles.quickActionCard}
             onPress={() => onNavigate && onNavigate('PCR')}
           >
-            <Ionicons name="bar-chart" size={18} color={THEME.colors.primary} />
+            <Ionicons name="bar-chart" size={18} color={theme.colors.primary} />
             <Text style={styles.quickActionTitle}>PCR 5m/15m</Text>
             <Text style={styles.quickActionSub}>
               {Number(marketData?.pcr_oi || 1).toFixed(2)} Ratio
@@ -63,20 +66,9 @@ export const DashboardScreen = ({ onNavigate }) => {
 
           <TouchableOpacity
             style={styles.quickActionCard}
-            onPress={() => onNavigate && onNavigate('Gate')}
-          >
-            <Ionicons name="shield-checkmark" size={18} color={THEME.colors.bullish} />
-            <Text style={styles.quickActionTitle}>Trade Gate</Text>
-            <Text style={[styles.quickActionSub, { color: THEME.colors.bullish }]}>
-              {tradeGateAnalysis?.score || 0}/20 Score
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.quickActionCard}
             onPress={() => onNavigate && onNavigate('Journal')}
           >
-            <Ionicons name="journal" size={18} color={THEME.colors.warning} />
+            <Ionicons name="journal" size={18} color={theme.colors.warning} />
             <Text style={styles.quickActionTitle}>Journal</Text>
             <Text style={styles.quickActionSub}>Live Logs</Text>
           </TouchableOpacity>
@@ -102,8 +94,8 @@ export const DashboardScreen = ({ onNavigate }) => {
           {/* Support (PE OI) */}
           <View style={[styles.srBox, styles.supportBox]}>
             <View style={styles.srHeader}>
-              <Ionicons name="arrow-up-circle" size={16} color={THEME.colors.bullish} />
-              <Text style={[styles.srTitle, { color: THEME.colors.bullish }]}>TOP SUPPORT (PE OI)</Text>
+              <Ionicons name="arrow-up-circle" size={16} color={theme.colors.bullish} />
+              <Text style={[styles.srTitle, { color: theme.colors.bullish }]}>TOP SUPPORT (PE OI)</Text>
             </View>
             {topSupport.slice(0, 3).map((item, idx) => (
               <View key={idx} style={styles.srRow}>
@@ -118,8 +110,8 @@ export const DashboardScreen = ({ onNavigate }) => {
           {/* Resistance (CE OI) */}
           <View style={[styles.srBox, styles.resistanceBox]}>
             <View style={styles.srHeader}>
-              <Ionicons name="arrow-down-circle" size={16} color={THEME.colors.bearish} />
-              <Text style={[styles.srTitle, { color: THEME.colors.bearish }]}>TOP RESISTANCE (CE OI)</Text>
+              <Ionicons name="arrow-down-circle" size={16} color={theme.colors.bearish} />
+              <Text style={[styles.srTitle, { color: theme.colors.bearish }]}>TOP RESISTANCE (CE OI)</Text>
             </View>
             {topRes.slice(0, 3).map((item, idx) => (
               <View key={idx} style={styles.srRow}>
@@ -132,14 +124,17 @@ export const DashboardScreen = ({ onNavigate }) => {
           </View>
         </View>
 
-        {/* Intraday Chart Preview */}
+        {/* Advanced Analytics */}
+        <AdvancedAnalyticsCard analytics={marketData?.analytics} />
+
+        {/* Open Interest Chart (Fast Native View) */}
         <View style={styles.chartHeaderRow}>
-          <Text style={styles.sectionTitle}>INTRADAY CANDLESTICK & VWAP</Text>
-          <TouchableOpacity onPress={() => onNavigate && onNavigate('Chart')}>
-            <Text style={styles.seeAllLink}>Full Chart →</Text>
+          <Text style={styles.sectionTitle}>OPEN INTEREST & PCR (LIVE)</Text>
+          <TouchableOpacity onPress={() => onNavigate && onNavigate('Chain')}>
+            <Text style={styles.seeAllLink}>Full Chain →</Text>
           </TouchableOpacity>
         </View>
-        <CandlestickChart height={220} />
+        <OiBarChart chain={marketData?.chain} atm={atm} />
 
         <View style={{ height: 30 }} />
       </ScrollView>
@@ -149,10 +144,10 @@ export const DashboardScreen = ({ onNavigate }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.colors.bgDark,
+    backgroundColor: theme.colors.bgDark,
   },
   scrollContent: {
     paddingBottom: 24,
@@ -160,15 +155,15 @@ const styles = StyleSheet.create({
   errorBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: THEME.colors.bearishBg,
+    backgroundColor: theme.colors.bearishBg,
     paddingHorizontal: 14,
     paddingVertical: 8,
     gap: 8,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.bearishBorder,
+    borderBottomColor: theme.colors.bearishBorder,
   },
   errorBannerText: {
-    color: THEME.colors.bearish,
+    color: theme.colors.bearish,
     fontSize: 12,
     fontWeight: '700',
     flex: 1,
@@ -181,22 +176,22 @@ const styles = StyleSheet.create({
   },
   quickActionCard: {
     flex: 1,
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 6,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   quickActionTitle: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 10,
     fontWeight: '800',
     marginTop: 4,
   },
   quickActionSub: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 9,
     marginTop: 1,
   },
@@ -208,17 +203,17 @@ const styles = StyleSheet.create({
   },
   srBox: {
     flex: 1,
-    backgroundColor: THEME.colors.bgCardSolid,
+    backgroundColor: theme.colors.bgCardSolid,
     borderRadius: 14,
     padding: 12,
     borderWidth: 1,
-    ...THEME.shadows.card,
+    ...theme.shadows.card,
   },
   supportBox: {
-    borderColor: THEME.colors.bullishBorder,
+    borderColor: theme.colors.bullishBorder,
   },
   resistanceBox: {
-    borderColor: THEME.colors.bearishBorder,
+    borderColor: theme.colors.bearishBorder,
   },
   srHeader: {
     flexDirection: 'row',
@@ -227,7 +222,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingBottom: 6,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.borderLight,
+    borderBottomColor: theme.colors.borderLight,
   },
   srTitle: {
     fontSize: 10,
@@ -239,21 +234,21 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   srStrike: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 12,
     fontWeight: '800',
   },
   srOi: {
-    color: THEME.colors.textSecondary,
+    color: theme.colors.textSecondary,
     fontSize: 11,
     fontWeight: '600',
   },
   srLtp: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
   },
   emptyText: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     paddingVertical: 6,
     textAlign: 'center',
@@ -267,13 +262,13 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   sectionTitle: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   seeAllLink: {
-    color: THEME.colors.primary,
+    color: theme.colors.primary,
     fontSize: 12,
     fontWeight: '800',
   },

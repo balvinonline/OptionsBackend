@@ -11,9 +11,11 @@ import { useMarket } from '../context/MarketContext';
 import { IndexHeader } from '../components/IndexHeader';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { ServerSettingsModal } from '../components/ServerSettingsModal';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
 export const ChartScreen = () => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
   const { selectedIndex, marketData } = useMarket();
   const [timeframe, setTimeframe] = useState('5m');
   const [showVwap, setShowVwap] = useState(true);
@@ -36,7 +38,7 @@ export const ChartScreen = () => {
         </View>
 
         <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.changeText, { color: isPositive ? THEME.colors.bullish : THEME.colors.bearish }]}>
+          <Text style={[styles.changeText, { color: isPositive ? theme.colors.bullish : theme.colors.bearish }]}>
             {change > 0 ? `+${change.toFixed(2)}` : change.toFixed(2)} ({Number(marketData?.pChange || 0).toFixed(2)}%)
           </Text>
           <Text style={styles.vixText}>India VIX: {Number(marketData?.vix || 14.2).toFixed(2)}</Text>
@@ -78,7 +80,7 @@ export const ChartScreen = () => {
 
       {/* Chart Canvas */}
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <CandlestickChart height={340} showIndicators={showVwap || showEma} />
+        <CandlestickChart symbol={selectedIndex} height={340} />
 
         {/* Technical Pivot Points Summary */}
         <View style={styles.pivotsCard}>
@@ -86,37 +88,37 @@ export const ChartScreen = () => {
           <View style={styles.pivotGrid}>
             <View style={styles.pivotTile}>
               <Text style={styles.pivotLabel}>R2 Resistance</Text>
-              <Text style={[styles.pivotVal, { color: THEME.colors.bearish }]}>
+              <Text style={[styles.pivotVal, { color: theme.colors.bearish }]}>
                 ₹{(spot + 150).toFixed(0)}
               </Text>
             </View>
             <View style={styles.pivotTile}>
               <Text style={styles.pivotLabel}>R1 Resistance</Text>
-              <Text style={[styles.pivotVal, { color: THEME.colors.bearish }]}>
+              <Text style={[styles.pivotVal, { color: theme.colors.bearish }]}>
                 ₹{(spot + 75).toFixed(0)}
               </Text>
             </View>
             <View style={styles.pivotTile}>
               <Text style={styles.pivotLabel}>Pivot Point</Text>
-              <Text style={[styles.pivotVal, { color: THEME.colors.primaryLight }]}>
+              <Text style={[styles.pivotVal, { color: theme.colors.primaryLight }]}>
                 ₹{spot.toFixed(0)}
               </Text>
             </View>
             <View style={styles.pivotTile}>
               <Text style={styles.pivotLabel}>S1 Support</Text>
-              <Text style={[styles.pivotVal, { color: THEME.colors.bullish }]}>
+              <Text style={[styles.pivotVal, { color: theme.colors.bullish }]}>
                 ₹{(spot - 75).toFixed(0)}
               </Text>
             </View>
             <View style={styles.pivotTile}>
               <Text style={styles.pivotLabel}>S2 Support</Text>
-              <Text style={[styles.pivotVal, { color: THEME.colors.bullish }]}>
+              <Text style={[styles.pivotVal, { color: theme.colors.bullish }]}>
                 ₹{(spot - 150).toFixed(0)}
               </Text>
             </View>
             <View style={styles.pivotTile}>
               <Text style={styles.pivotLabel}>VWAP Level</Text>
-              <Text style={[styles.pivotVal, { color: THEME.colors.primary }]}>
+              <Text style={[styles.pivotVal, { color: theme.colors.primary }]}>
                 ₹{(spot + 12).toFixed(0)}
               </Text>
             </View>
@@ -129,10 +131,10 @@ export const ChartScreen = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.colors.bgDark,
+    backgroundColor: theme.colors.bgDark,
   },
   scrollContent: {
     paddingBottom: 30,
@@ -143,18 +145,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: THEME.colors.bgCardSolid,
+    backgroundColor: theme.colors.bgCardSolid,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.borderLight,
+    borderBottomColor: theme.colors.borderLight,
   },
   indexTitle: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
   spotValue: {
-    color: THEME.colors.textPrimary,
+    color: theme.colors.textPrimary,
     fontSize: 20,
     fontWeight: '900',
   },
@@ -163,7 +165,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   vixText: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     marginTop: 2,
   },
@@ -173,9 +175,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: THEME.colors.bgDark,
+    backgroundColor: theme.colors.bgDark,
     borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.borderLight,
+    borderBottomColor: theme.colors.borderLight,
   },
   tfGroup: {
     flexDirection: 'row',
@@ -185,13 +187,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
   },
   tfBtnActive: {
-    backgroundColor: THEME.colors.primary,
+    backgroundColor: theme.colors.primary,
   },
   tfText: {
-    color: THEME.colors.textSecondary,
+    color: theme.colors.textSecondary,
     fontSize: 11,
     fontWeight: '700',
   },
@@ -207,34 +209,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   indBtnActive: {
-    borderColor: THEME.colors.primary,
+    borderColor: theme.colors.primary,
     backgroundColor: 'rgba(56, 189, 248, 0.15)',
   },
   indText: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     fontWeight: '700',
   },
   indTextActive: {
-    color: THEME.colors.primary,
+    color: theme.colors.primary,
     fontWeight: '800',
   },
   pivotsCard: {
-    backgroundColor: THEME.colors.bgCardSolid,
+    backgroundColor: theme.colors.bgCardSolid,
     borderRadius: 16,
     padding: 14,
     marginHorizontal: 14,
     marginTop: 14,
     borderWidth: 1,
-    borderColor: THEME.colors.border,
+    borderColor: theme.colors.border,
   },
   pivotsTitle: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.5,
@@ -248,14 +250,14 @@ const styles = StyleSheet.create({
   },
   pivotTile: {
     width: '31%',
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: theme.colors.bgCard,
     borderRadius: 8,
     padding: 8,
     borderWidth: 1,
-    borderColor: THEME.colors.borderLight,
+    borderColor: theme.colors.borderLight,
   },
   pivotLabel: {
-    color: THEME.colors.textMuted,
+    color: theme.colors.textMuted,
     fontSize: 9,
     fontWeight: '700',
   },

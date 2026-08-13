@@ -46,6 +46,9 @@ dist_folder = Path(__file__).resolve().parent.parent / "dist"
 app = Flask(__name__, static_folder=str(dist_folder), static_url_path='/')
 CORS(app)
 
+from flask_socketio import SocketIO, emit, join_room, leave_room
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+
 @app.errorhandler(404)
 def not_found(e):
     if request.path.startswith('/api/'):
@@ -1095,6 +1098,7 @@ _FYERS_WS_STATUS = {
     "error": "",
     "updated_at": "",
 }
+_FYERS_WS_OPTION_SYMBOLS = {}
 FYERS_WS_STALE_SECONDS = 20
 
 _FUTURE_OI_CACHE = {}
@@ -1493,6 +1497,12 @@ def on_fyers_ws_message(message):
             for key in keys:
                 if key:
                     _FYERS_WS_TICKS[key] = tick
+            # Broadcast raw tick to subscribed Socket.IO clients
+            if symbol and is_meaningful_tick(tick):
+                try:
+                    socketio.emit('tick', tick, room=symbol)
+                except Exception:
+                    pass
             if symbol and is_meaningful_tick(tick):
                 cache_quote_block(symbol, {
                     "symbol": symbol,
@@ -7569,5 +7579,90 @@ def debug_index():
 })
 
 
+@socketio.on('subscribe')
+def handle_subscribe(data):
+    if not isinstance(data, dict):
+        return
+    symbols = data.get('symbols', [])
+    if not isinstance(symbols, list):
+        symbols = [symbols]
+    
+    valid_symbols = []
+    
+    # Base symbols like NIFTY need to be expanded into Spot, Future, and Option Chain symbols
+    for base_sym in symbols:
+        if not base_sym or not isinstance(base_sym, str): continue
+        base_sym = base_sym.strip().upper()
+        
+        # Always join the base room so frontend gets updates easily
+        join_room(base_sym)
+        
+        if is_streamable_index_key(base_sym):
+            spot = stream_symbol_for_index(base_sym)
+            future = stream_future_for_index(base_sym)
+            if spot:
+                valid_symbols.append(spot)
+                join_room(spot)
+            if future:
+                valid_symbols.append(future)
+                join_room(future)
+                
+            # Grab the option chain symbols if available in the cache
+            chain_syms = _FYERS_WS_OPTION_SYMBOLS.get(base_sym, [])
+            if not chain_syms:
+                # If we don't have them cached, try to fetch the chain quickly
+                try:
+                    oc_raw = get_option_chain_fyers(base_sym)
+                    if isinstance(oc_raw, dict) and "data" in oc_raw:
+                        data_block = oc_raw["data"]
+                        chain_syms = []
+                        if isinstance(data_block, dict):
+                            opts = data_block.get("optionsChain", [])
+                            for row in opts:
+                                if "symbol" in row: chain_syms.append(row["symbol"])
+                                if "pe_symbol" in row: chain_syms.append(row["pe_symbol"])
+                                if "ce_symbol" in row: chain_syms.append(row["ce_symbol"])
+                                if "symbol_CE" in row: chain_syms.append(row["symbol_CE"])
+                                if "symbol_PE" in row: chain_syms.append(row["symbol_PE"])
+                        elif isinstance(data_block, list):
+                            for row in data_block:
+                                if "symbol" in row: chain_syms.append(row["symbol"])
+                        
+                        _FYERS_WS_OPTION_SYMBOLS[base_sym] = list(set(chain_syms))
+                        chain_syms = _FYERS_WS_OPTION_SYMBOLS[base_sym]
+                except Exception:
+                    pass
+            
+            for cs in chain_syms:
+                if cs:
+                    valid_symbols.append(cs)
+                    join_room(cs) # Also join the individual symbol room
+                    
+        else:
+            # Handle direct Fyers symbols or stocks
+            stream_sym = sanitize_fyers_history_symbol(base_sym) or normalize_stock_option_symbol(base_sym)
+            if stream_sym:
+                valid_symbols.append(stream_sym)
+                join_room(stream_sym)
+
+    valid_symbols = unique_symbols(valid_symbols)
+    if valid_symbols:
+        # Subscribe via Fyers data websocket
+        ensure_fyers_ws_stream(valid_symbols)
+        emit('subscribed', {'symbols': valid_symbols})
+
+@socketio.on('unsubscribe')
+def handle_unsubscribe(data):
+    if not isinstance(data, dict):
+        return
+    symbols = data.get('symbols', [])
+    if not isinstance(symbols, list):
+        symbols = [symbols]
+    
+    for sym in symbols:
+        if not sym or not isinstance(sym, str): continue
+        leave_room(sym.strip().upper())
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", debug=False, port=5000, threaded=True, use_reloader=False)
+    socketio.run(app, host="0.0.0.0", debug=False, port=5000, use_reloader=False)
