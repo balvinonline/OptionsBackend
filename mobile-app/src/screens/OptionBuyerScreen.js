@@ -63,15 +63,22 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
         {displayChain.map((row) => {
           const ceSignal = getSignal(row.ce_ch, row.ce_oich, 'Call');
           const peSignal = getSignal(row.pe_ch, row.pe_oich, 'Put');
+          const ceGreek = liveGreeks[row.ce_symbol] || { delta: 0, theta: 0 };
+          const peGreek = liveGreeks[row.pe_symbol] || { delta: 0, theta: 0 };
+          
           return (
             <View key={row.strike} style={styles.chainRow}>
               <View style={styles.chainColSignal}>
-                <Text style={[styles.chainCol, { color: theme.colors.success }]}>{row.ce_ltp?.toFixed(2) || '-'}</Text>
+                <Text style={[styles.chainCol, { color: theme.colors.bullish }]}>{row.ce_ltp?.toFixed(2) || '-'}</Text>
+                <Text style={styles.greekText}>Δ: {ceGreek.delta.toFixed(2)} | Θ: {ceGreek.theta.toFixed(2)}</Text>
                 {ceSignal && <Text style={[styles.signalBadge, { backgroundColor: ceSignal.color }]}>{ceSignal.text}</Text>}
               </View>
+              
               <Text style={styles.chainColStrike}>{row.strike}</Text>
+              
               <View style={styles.chainColSignal}>
-                <Text style={[styles.chainCol, { color: theme.colors.danger }]}>{row.pe_ltp?.toFixed(2) || '-'}</Text>
+                <Text style={[styles.chainCol, { color: theme.colors.bearish }]}>{row.pe_ltp?.toFixed(2) || '-'}</Text>
+                <Text style={styles.greekText}>Δ: {peGreek.delta.toFixed(2)} | Θ: {peGreek.theta.toFixed(2)}</Text>
                 {peSignal && <Text style={[styles.signalBadge, { backgroundColor: peSignal.color }]}>{peSignal.text}</Text>}
               </View>
             </View>
@@ -178,6 +185,11 @@ const getStyles = (theme) => StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
     overflow: 'hidden',
+  },
+  greekText: {
+    fontSize: 9,
+    color: theme.colors.textMuted,
+    marginTop: 2,
   },
   chainColStrike: {
     flex: 1,
