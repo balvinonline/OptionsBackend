@@ -17,6 +17,15 @@ import socket
 import sqlite3
 import secrets
 import werkzeug.security
+import math
+
+try:
+    from greeks import calculate_greeks, implied_volatility
+except Exception as e:
+    print("Warning: greeks.py not found or error:", e)
+    def calculate_greeks(*args, **kwargs): return {"delta": 0, "theta": 0, "gamma": 0}
+    def implied_volatility(*args, **kwargs): return 0.0001
+
 
 socket.setdefaulttimeout(5.0)
 
@@ -47,10 +56,19 @@ load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 dist_folder = Path(__file__).resolve().parent.parent / "dist"
 app = Flask(__name__, static_folder=str(dist_folder), static_url_path='/')
+app.config["SECRET_KEY"] = "super-secret-dashboard-key"
 CORS(app)
 
 from flask_socketio import SocketIO, emit, join_room, leave_room
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="gevent",
+    ping_timeout=10,
+    ping_interval=5,
+    logger=False,
+    engineio_logger=False
+)
 
 @app.errorhandler(404)
 def not_found(e):
@@ -1094,6 +1112,7 @@ _FYERS_WS_LOCK = threading.RLock()
 _FYERS_WS_SOCKET = None
 _FYERS_WS_SYMBOLS = set()
 _FYERS_WS_TICKS = {}
+_PREV_TICK_VOLUMES = {}
 _FYERS_WS_STATUS = {
     "connected": False,
     "started": False,
@@ -1436,6 +1455,13 @@ def stream_symbol_for_index(symbol_key):
             return fyers_symbol
     return "NSE:NIFTY50-INDEX"
 
+def stream_future_for_index(symbol_key):
+    symbol_key = normalize_symbol_key(symbol_key)
+    cfg = INDEX_MAP.get(symbol_key)
+    if cfg:
+        return cfg.get("future")
+    return None
+
 
 def is_streamable_index_key(symbol_key):
     symbol_key = normalize_symbol_key(symbol_key)
@@ -1501,6 +1527,24 @@ def on_fyers_ws_message(message):
                 if key:
                     _FYERS_WS_TICKS[key] = tick
             # Broadcast raw tick to subscribed Socket.IO clients
+            
+            # --- WHALE TRACKER ---
+            if "CE" in symbol or "PE" in symbol:
+                vol = safe_float(tick.get("volume"), 0)
+                if vol > 0:
+                    old_vol = _PREV_TICK_VOLUMES.get(symbol, 0)
+                    if old_vol > 0 and (vol - old_vol) > 50000:  # 50k jump in a single tick
+                        try:
+                            socketio.emit('oi_spike_alert', {
+                                "symbol": symbol,
+                                "type": "VOLUME_SPIKE",
+                                "value": vol - old_vol,
+                                "timestamp": datetime.now().strftime("%H:%M:%S")
+                            })
+                        except Exception:
+                            pass
+                    _PREV_TICK_VOLUMES[symbol] = vol
+            # ---------------------
             if symbol and is_meaningful_tick(tick):
                 try:
                     socketio.emit('tick', tick, room=symbol)
@@ -1590,7 +1634,10 @@ def ensure_fyers_ws_stream(symbols):
         if _FYERS_WS_SOCKET is not None:
             if missing:
                 try:
-                    _FYERS_WS_SOCKET.subscribe(symbols=missing, data_type="SymbolUpdate")
+                    # Fyers websocket may ignore requests with too many symbols at once. Chunking to 50.
+                    for i in range(0, len(missing), 50):
+                        chunk = missing[i:i+50]
+                        _FYERS_WS_SOCKET.subscribe(symbols=chunk, data_type="SymbolUpdate")
                 except Exception as e:
                     _FYERS_WS_STATUS["error"] = str(e)
                     return False, str(e)
@@ -1604,7 +1651,9 @@ def ensure_fyers_ws_stream(symbols):
                 _FYERS_WS_STATUS["error"] = ""
                 _FYERS_WS_STATUS["updated_at"] = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
             try:
-                _FYERS_WS_SOCKET.subscribe(symbols=wanted, data_type="SymbolUpdate")
+                for i in range(0, len(wanted), 50):
+                    chunk = wanted[i:i+50]
+                    _FYERS_WS_SOCKET.subscribe(symbols=chunk, data_type="SymbolUpdate")
             except Exception as e:
                 with _FYERS_WS_LOCK:
                     _FYERS_WS_STATUS["error"] = str(e)
@@ -7652,6 +7701,41 @@ def handle_subscribe(data):
     if valid_symbols:
         # Subscribe via Fyers data websocket
         ensure_fyers_ws_stream(valid_symbols)
+
+@socketio.on('subscribe_strip')
+def handle_subscribe_strip(data):
+    if not isinstance(data, dict):
+        return
+    symbols = data.get('symbols', [])
+    if not isinstance(symbols, list):
+        symbols = [symbols]
+    
+    valid_symbols = []
+    
+    for base_sym in symbols:
+        if not base_sym or not isinstance(base_sym, str): continue
+        base_sym = base_sym.strip().upper()
+        join_room(base_sym)
+        
+        if is_streamable_index_key(base_sym):
+            spot = stream_symbol_for_index(base_sym)
+            future = stream_future_for_index(base_sym)
+            if spot:
+                valid_symbols.append(spot)
+                join_room(spot)
+            if future:
+                valid_symbols.append(future)
+                join_room(future)
+        else:
+            stream_sym = sanitize_fyers_history_symbol(base_sym) or normalize_stock_option_symbol(base_sym)
+            if stream_sym:
+                valid_symbols.append(stream_sym)
+                join_room(stream_sym)
+
+    valid_symbols = unique_symbols(valid_symbols)
+    if valid_symbols:
+        ensure_fyers_ws_stream(valid_symbols)
+
         emit('subscribed', {'symbols': valid_symbols})
 
 @socketio.on('unsubscribe')
@@ -7669,3 +7753,74 @@ def handle_unsubscribe(data):
 
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", debug=False, port=5000, use_reloader=False)
+
+
+# --- OPTION BUYER HUB GREEKS THREAD ---
+def greeks_updater_thread():
+    while True:
+        try:
+            time.sleep(2.0)
+            if not _FYERS_WS_STATUS.get("connected"):
+                continue
+                
+            with _FYERS_WS_LOCK:
+                # We need to find the spot price. 
+                # Just find the first NIFTY50-INDEX or BANKNIFTY-INDEX in ticks.
+                spot_price = None
+                spot_symbol = "NSE:NIFTY50-INDEX"
+                if "NSE:NIFTY50-INDEX" in _FYERS_WS_TICKS:
+                    spot_price = safe_float(_FYERS_WS_TICKS["NSE:NIFTY50-INDEX"].get("ltp"))
+                elif "NSE:NIFTY BANK-INDEX" in _FYERS_WS_TICKS:
+                    spot_symbol = "NSE:NIFTY BANK-INDEX"
+                    spot_price = safe_float(_FYERS_WS_TICKS["NSE:NIFTY BANK-INDEX"].get("ltp"))
+                    
+                if not spot_price:
+                    continue
+                    
+                greeks_data = {}
+                # Calculate greeks for all CE/PE in ticks
+                for sym, tick in _FYERS_WS_TICKS.items():
+                    if not isinstance(tick, dict):
+                        continue
+                    if "CE" not in sym and "PE" not in sym:
+                        continue
+                        
+                    # Extract strike
+                    match = re.search(r'(\d{4,5})(CE|PE)', sym)
+                    if not match:
+                        continue
+                        
+                    strike = safe_float(match.group(1))
+                    opt_type = match.group(2)
+                    ltp = safe_float(tick.get("ltp"))
+                    
+                    if not strike or not ltp:
+                        continue
+                        
+                    # Filter out far OTM to save CPU
+                    if abs(strike - spot_price) > 1000:
+                        continue
+                        
+                    # Rough 3 days to expiry
+                    T = 3.0 / 365.0
+                    r = 0.07
+                    
+                    iv = implied_volatility(ltp, spot_price, strike, T, r, opt_type)
+                    greeks = calculate_greeks(spot_price, strike, T, r, iv, opt_type)
+                    
+                    greeks_data[sym] = {
+                        "iv": round(iv * 100, 2),
+                        "delta": greeks["delta"],
+                        "theta": greeks["theta"],
+                        "gamma": greeks["gamma"]
+                    }
+                    
+            if greeks_data:
+                socketio.emit('greeks_update', greeks_data)
+                
+        except Exception as e:
+            print("Greeks thread error:", e)
+
+# Start thread
+threading.Thread(target=greeks_updater_thread, daemon=True).start()
+# ----------------------------------------

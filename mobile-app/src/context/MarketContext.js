@@ -33,6 +33,8 @@ export const MarketProvider = ({ children }) => {
   const [signalJournal, setSignalJournal] = useState([]);
   const [pcrBuckets5m, setPcrBuckets5m] = useState([]);
   const [pcrBuckets15m, setPcrBuckets15m] = useState([]);
+  const [liveGreeks, setLiveGreeks] = useState({});
+  const [whaleAlerts, setWhaleAlerts] = useState([]);
   
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -456,6 +458,16 @@ export const MarketProvider = ({ children }) => {
       }
     });
 
+    socket.on('greeks_update', (data) => {
+      if (data) setLiveGreeks(data);
+    });
+
+    socket.on('oi_spike_alert', (data) => {
+      if (data) {
+        setWhaleAlerts((prev) => [data, ...prev].slice(0, 10));
+      }
+    });
+
     // Flush ticks at 60 FPS (approx 16ms, but let's do 100ms to save battery on React Native)
     const flushInterval = setInterval(() => {
       const bufferedSymbols = Object.keys(tickBuffer);
@@ -667,6 +679,8 @@ export const MarketProvider = ({ children }) => {
         tradeGateAnalysis,
         pcrBuckets5m,
         pcrBuckets15m,
+        liveGreeks,
+        whaleAlerts,
         atm,
         isLoading,
         isRefreshing,

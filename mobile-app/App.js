@@ -18,6 +18,7 @@ import { PcrAnalyticsScreen } from './src/screens/PcrAnalyticsScreen';
 import { StockOptionsScreen } from './src/screens/StockOptionsScreen';
 import { StockDeskScreen } from './src/screens/StockDeskScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
+import { OptionBuyerScreen } from './src/screens/OptionBuyerScreen';
 import { Sidebar } from './src/components/Sidebar';
 
 function MainLayout() {
@@ -90,6 +91,10 @@ function MainLayout() {
 
         <View style={[styles.screenWrapper, activeTab === 'PCR' && !webFeatureParams && !deskSymbol && styles.screenVisible]}>
           {activeTab === 'PCR' && <PcrAnalyticsScreen onNavigate={setActiveTab} />}
+        </View>
+
+        <View style={[styles.screenWrapper, activeTab === 'OptionBuyer' && !webFeatureParams && !deskSymbol && styles.screenVisible]}>
+          {activeTab === 'OptionBuyer' && <OptionBuyerScreen onNavigate={setActiveTab} />}
         </View>
 
         {deskSymbol && (
