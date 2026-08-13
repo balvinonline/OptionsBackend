@@ -144,20 +144,56 @@ export const StockDeskScreen = ({ symbol, onBack }) => {
 
             <CandlestickChart symbol={`NSE:${symbol}-EQ`} height={260} />
 
-            <View style={styles.chainHeader}>
-              <Text style={styles.sectionTitle}>OPTION CHAIN ({chainRows.length} Strikes)</Text>
-            </View>
-
-            <View style={styles.chainLabels}>
-              <Text style={[styles.chainLabel, { flex: 1 }]}>CALL OI/CHG</Text>
-              <Text style={[styles.chainLabel, { width: 60, textAlign: 'center' }]}>STRIKE</Text>
-              <Text style={[styles.chainLabel, { flex: 1, textAlign: 'right' }]}>PUT OI/CHG</Text>
+            <View style={[styles.chainHeader, { marginTop: 12 }]}>
+              <Text style={styles.sectionTitle}>Buyer's Chain ({chainRows.length} Strikes)</Text>
             </View>
 
             <View style={styles.chainContainer}>
-              {chainRows.map((row, idx) => (
-                <OptionChainRow key={idx} row={row} isATM={row.strike === atm} maxOi={maxOi} />
-              ))}
+              <View style={styles.chainRowHeader}>
+                <Text style={styles.chainCol}>Call LTP</Text>
+                <Text style={styles.chainColStrike}>Strike</Text>
+                <Text style={styles.chainCol}>Put LTP</Text>
+              </View>
+              {chainRows.map((row) => {
+                const getSignal = (priceChange, oiChange, side) => {
+                  if (priceChange == null || oiChange == null) return null;
+                  if (priceChange < 0 && oiChange > 0) return { text: `${side} Writing`, color: '#D50000' };
+                  if (priceChange > 0 && oiChange < 0) return { text: `${side} Unwinding`, color: '#2962FF' };
+                  if (priceChange > 0 && oiChange > 0) return { text: `${side} Long`, color: '#00C853' };
+                  if (priceChange < 0 && oiChange < 0) return { text: `${side} Long Unwind`, color: '#FF6D00' };
+                  return null;
+                };
+
+                const ceSignal = getSignal(row.ce_ch, row.ce_oich, 'Call');
+                const peSignal = getSignal(row.pe_ch, row.pe_oich, 'Put');
+                
+                // For stocks, greeks are attached to the row directly by the backend
+                const ceGreek = { delta: row.ce_delta || 0, theta: row.ce_theta || 0, gamma: row.ce_gamma || 0 };
+                const peGreek = { delta: row.pe_delta || 0, theta: row.pe_theta || 0, gamma: row.pe_gamma || 0 };
+                
+                const maxPainValue = detail?.analytics?.maxPain || detail?.max_pain || atm;
+                const isMaxPain = row.strike === maxPainValue;
+                const isCeHighVolume = row.ce_volume > (row.ce_oi * 2) && row.ce_volume > 50000;
+                const isPeHighVolume = row.pe_volume > (row.pe_oi * 2) && row.pe_volume > 50000;
+                
+                return (
+                  <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow]}>
+                    <View style={styles.chainColSignal}>
+                      <Text style={[styles.chainCol, { color: theme.colors.bullish }]}>{row.ce_ltp?.toFixed(2) || '-'} {isCeHighVolume ? '⚡' : ''}</Text>
+                      <Text style={styles.greekText}>Δ: {ceGreek.delta.toFixed(2)} | Θ: {ceGreek.theta.toFixed(2)} {ceGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
+                      {ceSignal && <Text style={[styles.signalBadge, { backgroundColor: ceSignal.color }]}>{ceSignal.text}</Text>}
+                    </View>
+                    
+                    <Text style={styles.chainColStrike}>{row.strike}</Text>
+                    
+                    <View style={styles.chainColSignal}>
+                      <Text style={[styles.chainCol, { color: theme.colors.bearish }]}>{row.pe_ltp?.toFixed(2) || '-'} {isPeHighVolume ? '⚡' : ''}</Text>
+                      <Text style={styles.greekText}>Δ: {peGreek.delta.toFixed(2)} | Θ: {peGreek.theta.toFixed(2)} {peGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
+                      {peSignal && <Text style={[styles.signalBadge, { backgroundColor: peSignal.color }]}>{peSignal.text}</Text>}
+                    </View>
+                  </View>
+                );
+              })}
             </View>
           </>
         ) : null}
@@ -308,6 +344,63 @@ const getStyles = (theme) => StyleSheet.create({
     fontWeight: '800',
     color: theme.colors.textMuted,
     letterSpacing: 0.5,
+  },
+  chainContainer: {
+    backgroundColor: theme.colors.surfaceLight,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    marginHorizontal: 14,
+  },
+  chainRowHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderLight,
+    paddingBottom: 8,
+    marginBottom: 8,
+  },
+  chainRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+  },
+  chainCol: {
+    textAlign: 'center',
+    color: theme.colors.textPrimary,
+  },
+  chainColSignal: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  signalBadge: {
+    marginTop: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    fontSize: 10,
+    color: 'white',
+    fontWeight: 'bold',
+    overflow: 'hidden',
+  },
+  greekText: {
+    fontSize: 9,
+    color: theme.colors.textMuted,
+    marginTop: 2,
+  },
+  chainColStrike: {
+    flex: 1,
+    textAlign: 'center',
+    fontWeight: 'bold',
+    color: theme.colors.textPrimary,
+  },
+  maxPainRow: {
+    borderTopWidth: 2,
+    borderBottomWidth: 2,
+    borderColor: '#FFD700',
+    backgroundColor: 'rgba(255, 215, 0, 0.05)',
   },
   chainLabels: {
     flexDirection: 'row',

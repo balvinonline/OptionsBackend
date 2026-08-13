@@ -10,7 +10,7 @@ export const CandlestickChart = ({ symbol = 'NIFTY', height = 260, expandedView 
   const styles = getStyles(theme);
   const [isExpanded, setIsExpanded] = useState(false);
   const serverUrl = getApiBaseUrl();
-  const apiEndpoint = `${serverUrl}/api/fyers/history?symbol=${symbol}&resolution=5&lookback=1875`;
+  const apiEndpoint = `${serverUrl}/api/fyers/history?rawSymbol=${symbol}&resolution=5&lookback=1875`;
 
   const htmlContent = `
     <!DOCTYPE html>
