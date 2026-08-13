@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useMarket } from '../context/MarketContext';
+import { IndexHeader } from '../components/IndexHeader';
 
 export const OptionBuyerScreen = ({ onNavigate }) => {
   const { theme } = useTheme();
@@ -37,8 +38,10 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Option Buyer Hub</Text>
+    <View style={styles.container}>
+      <IndexHeader />
+      <ScrollView style={styles.scrollArea}>
+        <Text style={styles.title}>Option Buyer Hub</Text>
       
       {/* Momentum & IV Header */}
       <View style={styles.headerCards}>
@@ -80,21 +83,21 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
           const peGreek = liveGreeks[row.pe_symbol] || { delta: 0, theta: 0, gamma: 0 };
           const maxPainValue = marketData?.analytics?.maxPain || marketData?.max_pain;
           const isMaxPain = row.strike === maxPainValue;
-          const isCeHighVolume = row.ce_volume > (row.ce_oi * 2) && row.ce_volume > 0;
-          const isPeHighVolume = row.pe_volume > (row.pe_oi * 2) && row.pe_volume > 0;
+          const isCeHighVolume = row.ce_volume > (row.ce_oi * 2) && row.ce_volume > 50000;
+          const isPeHighVolume = row.pe_volume > (row.pe_oi * 2) && row.pe_volume > 50000;
           
           return (
             <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow]}>
-              <View style={[styles.chainColSignal, isCeHighVolume && styles.highVolumeBg]}>
-                <Text style={[styles.chainCol, { color: theme.colors.bullish }]}>{row.ce_ltp?.toFixed(2) || '-'}</Text>
+              <View style={styles.chainColSignal}>
+                <Text style={[styles.chainCol, { color: theme.colors.bullish }]}>{row.ce_ltp?.toFixed(2) || '-'} {isCeHighVolume ? '⚡' : ''}</Text>
                 <Text style={styles.greekText}>Δ: {ceGreek.delta.toFixed(2)} | Θ: {ceGreek.theta.toFixed(2)} {ceGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
                 {ceSignal && <Text style={[styles.signalBadge, { backgroundColor: ceSignal.color }]}>{ceSignal.text}</Text>}
               </View>
               
               <Text style={styles.chainColStrike}>{row.strike}</Text>
               
-              <View style={[styles.chainColSignal, isPeHighVolume && styles.highVolumeBg]}>
-                <Text style={[styles.chainCol, { color: theme.colors.bearish }]}>{row.pe_ltp?.toFixed(2) || '-'}</Text>
+              <View style={styles.chainColSignal}>
+                <Text style={[styles.chainCol, { color: theme.colors.bearish }]}>{row.pe_ltp?.toFixed(2) || '-'} {isPeHighVolume ? '⚡' : ''}</Text>
                 <Text style={styles.greekText}>Δ: {peGreek.delta.toFixed(2)} | Θ: {peGreek.theta.toFixed(2)} {peGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
                 {peSignal && <Text style={[styles.signalBadge, { backgroundColor: peSignal.color }]}>{peSignal.text}</Text>}
               </View>
@@ -117,6 +120,7 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
         )}
       </View>
     </ScrollView>
+  </View>
   );
 };
 
@@ -124,7 +128,10 @@ const getStyles = (theme) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.bgDark,
-    padding: 16,
+  },
+  scrollArea: {
+    flex: 1,
+    padding: 14,
   },
   title: {
     fontSize: 24,
@@ -242,10 +249,6 @@ const getStyles = (theme) => StyleSheet.create({
     borderBottomWidth: 2,
     borderColor: '#FFD700',
     backgroundColor: 'rgba(255, 215, 0, 0.05)',
-  },
-  highVolumeBg: {
-    backgroundColor: 'rgba(255, 215, 0, 0.2)',
-    borderRadius: 4,
   },
   warningBanner: {
     padding: 12,
