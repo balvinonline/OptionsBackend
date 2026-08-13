@@ -27,6 +27,15 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
   const endIdx = Math.min(chain.length, atmIndex + 6);
   const displayChain = chain.slice(startIdx, endIdx);
 
+  const getSignal = (priceChange, oiChange, side) => {
+    if (priceChange == null || oiChange == null) return null;
+    if (priceChange < 0 && oiChange > 0) return { text: `${side} Writing`, color: '#D50000' };
+    if (priceChange > 0 && oiChange < 0) return { text: `${side} Unwinding`, color: '#2962FF' };
+    if (priceChange > 0 && oiChange > 0) return { text: `${side} Long`, color: '#00C853' };
+    if (priceChange < 0 && oiChange < 0) return { text: `${side} Long Unwind`, color: '#FF6D00' };
+    return null;
+  };
+
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Option Buyer Hub</Text>
@@ -51,13 +60,23 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
           <Text style={styles.chainColStrike}>Strike</Text>
           <Text style={styles.chainCol}>Put LTP</Text>
         </View>
-        {displayChain.map((row) => (
-          <View key={row.strike} style={styles.chainRow}>
-            <Text style={[styles.chainCol, { color: theme.colors.success }]}>{row.ce_ltp?.toFixed(2) || '-'}</Text>
-            <Text style={styles.chainColStrike}>{row.strike}</Text>
-            <Text style={[styles.chainCol, { color: theme.colors.danger }]}>{row.pe_ltp?.toFixed(2) || '-'}</Text>
-          </View>
-        ))}
+        {displayChain.map((row) => {
+          const ceSignal = getSignal(row.ce_ch, row.ce_oich, 'Call');
+          const peSignal = getSignal(row.pe_ch, row.pe_oich, 'Put');
+          return (
+            <View key={row.strike} style={styles.chainRow}>
+              <View style={styles.chainColSignal}>
+                <Text style={[styles.chainCol, { color: theme.colors.success }]}>{row.ce_ltp?.toFixed(2) || '-'}</Text>
+                {ceSignal && <Text style={[styles.signalBadge, { backgroundColor: ceSignal.color }]}>{ceSignal.text}</Text>}
+              </View>
+              <Text style={styles.chainColStrike}>{row.strike}</Text>
+              <View style={styles.chainColSignal}>
+                <Text style={[styles.chainCol, { color: theme.colors.danger }]}>{row.pe_ltp?.toFixed(2) || '-'}</Text>
+                {peSignal && <Text style={[styles.signalBadge, { backgroundColor: peSignal.color }]}>{peSignal.text}</Text>}
+              </View>
+            </View>
+          );
+        })}
       </View>
 
       {/* Whale Tracker Feed */}
@@ -143,9 +162,22 @@ const getStyles = (theme) => StyleSheet.create({
     paddingVertical: 6,
   },
   chainCol: {
-    flex: 1,
     textAlign: 'center',
     color: theme.colors.textPrimary,
+  },
+  chainColSignal: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  signalBadge: {
+    marginTop: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    fontSize: 10,
+    color: 'white',
+    fontWeight: 'bold',
+    overflow: 'hidden',
   },
   chainColStrike: {
     flex: 1,
