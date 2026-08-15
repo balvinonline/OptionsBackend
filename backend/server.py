@@ -7684,7 +7684,7 @@ def handle_subscribe(data):
             if not chain_syms:
                 # If we don't have them cached, try to fetch the chain quickly
                 try:
-                    oc_raw = get_option_chain_fyers(base_sym)
+                    oc_raw = get_option_chain_raw(base_sym)
                     if isinstance(oc_raw, dict) and "data" in oc_raw:
                         data_block = oc_raw["data"]
                         chain_syms = []

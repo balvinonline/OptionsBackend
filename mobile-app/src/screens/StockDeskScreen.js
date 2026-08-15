@@ -170,8 +170,8 @@ export const StockDeskScreen = ({ symbol, onBack }) => {
                 const maxPainValue = detail?.analytics?.maxPain || detail?.max_pain;
                 const isMaxPain = row.strike === maxPainValue;
                 const isAtm = row.strike === atmStrike;
-                const isCeHighVolume = row.ce_volume > (row.ce_oi * 2) && row.ce_volume > 50000;
-                const isPeHighVolume = row.pe_volume > (row.pe_oi * 2) && row.pe_volume > 50000;
+                const isCeHighVolume = row.ce_volume > (row.ce_oi * 1.5) && row.ce_volume > 500;
+                const isPeHighVolume = row.pe_volume > (row.pe_oi * 1.5) && row.pe_volume > 500;
                 
                 return (
                   <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow, isAtm && styles.atmRow]}>

@@ -27,8 +27,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "9cc82a20-ca6d-4a22-9b44-b7a99592334e"
+        "projectId": "b1fc72fc-4fad-4e0e-bac3-7221ee1b6124"
       }
-    }
+    },
+    "owner": "market-learning"
   }
 }

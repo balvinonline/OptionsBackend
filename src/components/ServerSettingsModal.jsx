@@ -138,7 +138,6 @@ export default function ServerSettingsModal({ visible, onClose, fyersStatus, onT
           </Button>
         </div>
       </div>
-      />
     </Modal>
   );
 }

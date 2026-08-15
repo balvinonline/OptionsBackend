@@ -3695,6 +3695,14 @@ function getStripSortIndex(label = "") {
   return 99;
 }
 
+function getFastTickerInterval(feed = "REST") {
+  return feed === "WS" ? 6000 : 2000;
+}
+
+function getOptionDataInterval(feed = "REST") {
+  return feed === "WS" ? 15000 : 10000;
+}
+
 function normalizeLiveTick(tick = {}, previous = {}) {
   if (!isNum(tick?.ltp)) return previous || {};
   const vwap = tick.vwap ?? tick.atp ?? tick.avg_trade_price ?? tick.avgTradePrice ?? tick.average_trade_price ?? tick.averageTradePrice;
@@ -12297,7 +12305,7 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
     if (tickerRequestRef.current) return;
     try {
       tickerRequestRef.current = true;
-      const json = await fetchJson("/api/home-ticker", 15000);
+      const json = await fetchJson("/api/home-ticker", 4500);
       setError("");
       setTickerData((prev) => mergeTickerPayload(prev, json));
       setHomeData((prev) => {
@@ -12489,15 +12497,16 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
   useEffect(() => {
     if (!autoRefresh) return undefined;
     const id = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
       if (isAfterMarketClose()) return;
       if (view === "home" || view === "trade-focus" || view === "trade-signals" || view === "premium-pulse" || view === "movers" || view === "stock-options" || view === "stock-paper" || view === "sectors" || view === "pcr" || view === "gate" || view === "review" || view === "charts" || view === "terminal-v2" || view === "expiry-scalper") {
         loadTicker();
       } else {
         loadDetail(symbol, true);
       }
-    }, view === "home" || view === "trade-focus" || view === "trade-signals" || view === "premium-pulse" || view === "movers" || view === "stock-options" || view === "stock-paper" || view === "sectors" || view === "pcr" || view === "gate" || view === "review" || view === "charts" || view === "terminal-v2" || view === "expiry-scalper" ? 6000 : 45000);
+    }, view === "home" || view === "trade-focus" || view === "trade-signals" || view === "premium-pulse" || view === "movers" || view === "stock-options" || view === "stock-paper" || view === "sectors" || view === "pcr" || view === "gate" || view === "review" || view === "charts" || view === "terminal-v2" || view === "expiry-scalper" ? getFastTickerInterval(dashboardFeed) : 45000);
     return () => clearInterval(id);
-  }, [autoRefresh, loadDetail, loadHome, loadTicker, symbol, view]);
+  }, [autoRefresh, dashboardFeed, loadDetail, loadTicker, symbol, view]);
 
   useEffect(() => {
     if (!autoRefresh || (view !== "home" && view !== "trade-focus" && view !== "trade-signals" && view !== "premium-pulse" && view !== "movers" && view !== "pcr" && view !== "charts" && view !== "terminal-v2" && view !== "expiry-scalper")) return undefined;
@@ -12511,11 +12520,33 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
   useEffect(() => {
     if (!autoRefresh || (view !== "home" && view !== "trade-focus" && view !== "trade-signals" && view !== "premium-pulse" && view !== "pcr" && view !== "charts" && view !== "terminal-v2" && view !== "expiry-scalper")) return undefined;
     const id = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
       if (isAfterMarketClose()) return;
       loadBuyerSetups(true);
-    }, 30000);
+    }, view === "pcr" ? getOptionDataInterval(dashboardFeed) : 30000);
     return () => clearInterval(id);
-  }, [autoRefresh, loadBuyerSetups, view]);
+  }, [autoRefresh, dashboardFeed, loadBuyerSetups, view]);
+
+  useEffect(() => {
+    if (!autoRefresh || view !== "detail") return undefined;
+    const id = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      if (isAfterMarketClose()) return;
+      loadDetail(symbol, true);
+    }, getOptionDataInterval(dashboardFeed));
+    return () => clearInterval(id);
+  }, [autoRefresh, dashboardFeed, loadDetail, symbol, view]);
+
+  useEffect(() => {
+    if (!autoRefresh || (!optionChainPopupSymbol && !indexComboPopupSymbol)) return undefined;
+    const activeSymbol = optionChainPopupSymbol || indexComboPopupSymbol;
+    const id = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      if (isAfterMarketClose()) return;
+      refreshBuyerSetup(activeSymbol);
+    }, getOptionDataInterval(dashboardFeed));
+    return () => clearInterval(id);
+  }, [autoRefresh, dashboardFeed, indexComboPopupSymbol, optionChainPopupSymbol, refreshBuyerSetup]);
 
   useEffect(() => {
     if (!autoRefresh || (view !== "home" && view !== "trade-focus" && view !== "trade-signals" && view !== "premium-pulse" && view !== "pcr" && view !== "charts" && view !== "terminal-v2" && view !== "expiry-scalper")) return undefined;
@@ -13158,7 +13189,7 @@ export default function ProfessionalDashboard({ onLogout, currentUser = "Admin" 
               <DashboardLogo />
               <div>
                 <strong>Options Desk</strong>
-                <span>{dashboardFeed === "WS" ? "Live feed" : "REST refresh"}</span>
+                <span>{dashboardFeed === "WS" ? "Live feed" : "Fast refresh"}</span>
               </div>
             </div>
             <nav className="sidebar-nav" aria-label="Workspace navigation">
