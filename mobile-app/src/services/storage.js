@@ -12,6 +12,19 @@ const KEYS = {
 
 export const CLOUD_SERVER_URL = 'https://optionsbackend.onrender.com';
 
+export const normalizeServerUrl = (value) => {
+  let raw = String(value || '').trim();
+  if (!raw) return CLOUD_SERVER_URL;
+
+  raw = raw.replace(/\s+/g, '');
+  if (!/^https?:\/\//i.test(raw)) {
+    raw = `https://${raw}`;
+  }
+
+  const originMatch = raw.match(/^(https?:\/\/[^/?#]+)(?:[/?#].*)?$/i);
+  return (originMatch ? originMatch[1] : raw).replace(/\/+$/, '');
+};
+
 // Default server URL - defaults to your 24/7 Render Cloud Server
 export const getDefaultServerUrl = () => {
   return CLOUD_SERVER_URL;
@@ -20,7 +33,7 @@ export const getDefaultServerUrl = () => {
 export const getStoredServerUrl = async () => {
   try {
     const url = await AsyncStorage.getItem(KEYS.SERVER_URL);
-    return url || getDefaultServerUrl();
+    return normalizeServerUrl(url || getDefaultServerUrl());
   } catch {
     return getDefaultServerUrl();
   }
@@ -28,7 +41,7 @@ export const getStoredServerUrl = async () => {
 
 export const setStoredServerUrl = async (url) => {
   try {
-    const clean = url.trim().replace(/\/+$/, '');
+    const clean = normalizeServerUrl(url);
     await AsyncStorage.setItem(KEYS.SERVER_URL, clean);
     return clean;
   } catch (e) {

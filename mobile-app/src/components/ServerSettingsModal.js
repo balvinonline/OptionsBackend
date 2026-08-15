@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { getStoredSettings, setStoredSetting, CLOUD_SERVER_URL } from '../services/storage';
+import { getStoredSettings, setStoredSetting, CLOUD_SERVER_URL, normalizeServerUrl } from '../services/storage';
 import { soundManager } from './AudioAlertHelper';
 import { useTheme } from '../context/ThemeContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -36,6 +36,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const [isTotpLoading, setIsTotpLoading] = useState(false);
   const [showWebView, setShowWebView] = useState(false);
   const [loginUrl, setLoginUrl] = useState('');
+  const isProcessingRef = useRef(false);
 
   React.useEffect(() => {
     if (visible) {
@@ -73,7 +74,9 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const startWebViewLogin = async () => {
     try {
       setIsTotpLoading(true);
-      const targetUrl = inputUrl.trim() || serverUrl;
+      isProcessingRef.current = false;
+      const targetUrl = normalizeServerUrl(inputUrl || serverUrl);
+      setInputUrl(targetUrl);
       const resp = await fetch(`${targetUrl}/api/fyers/login-url`, {
         headers: {
           'Bypass-Tunnel-Reminder': 'true',
@@ -97,6 +100,8 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const onWebViewNavigation = async (navState) => {
     const { url } = navState;
     if (url.includes('auth_code=') || url.includes('code=')) {
+      if (isProcessingRef.current) return;
+      isProcessingRef.current = true;
       setShowWebView(false);
       handleSubmitAuthCode(url);
     } else if (url.includes('error=')) {
@@ -108,7 +113,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const handleSubmitAuthCode = async (finalUrl) => {
     setIsTotpLoading(true);
     try {
-      const targetUrl = inputUrl.trim() || serverUrl;
+      const targetUrl = normalizeServerUrl(inputUrl || serverUrl);
       const resp = await fetch(`${targetUrl}/api/fyers/save-token`, {
         method: 'POST',
         headers: { 
@@ -140,7 +145,9 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
       Alert.alert('Error', 'Server URL cannot be empty');
       return;
     }
-    await updateServerUrl(inputUrl);
+    const cleanUrl = normalizeServerUrl(inputUrl);
+    setInputUrl(cleanUrl);
+    await updateServerUrl(cleanUrl);
     onClose();
   };
 
@@ -214,7 +221,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
                   onPress={() => setInputUrl(CLOUD_SERVER_URL)}
                 >
                   <Ionicons name="cloud" size={12} color={theme.colors.primary} />
-                  <Text style={[styles.presetText, { color: theme.colors.primary }]}>☁️ Live Local Tunnel (24/7)</Text>
+                  <Text style={[styles.presetText, { color: theme.colors.primary }]}>Cloud Server</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.presetBtn}
@@ -319,6 +326,10 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
           <WebView
             source={{ uri: loginUrl }}
             onNavigationStateChange={onWebViewNavigation}
+            onShouldStartLoadWithRequest={(request) => {
+              onWebViewNavigation(request);
+              return true;
+            }}
             startInLoadingState={true}
             renderLoading={() => (
               <View style={styles.webViewLoader}>

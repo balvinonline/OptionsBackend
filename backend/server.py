@@ -293,6 +293,13 @@ def extract_fyers_auth_code(value):
     return text
 
 
+def get_fyers_redirect_uri():
+    return os.getenv(
+        "FYERS_REDIRECT_URI",
+        "https://trade.fyers.in/api-login/redirect-uri/index.html",
+    ).strip()
+
+
 def get_fyers_env_status():
     try:
         env_mtime = ENV_PATH.stat().st_mtime if ENV_PATH.exists() else 0.0
@@ -314,6 +321,7 @@ def get_fyers_env_status():
         "fyersPinPresent": bool(fyers_pin),
         "totpKeyPresent": bool(totp_key),
         "totpConfigured": bool(client_id and secret_key and fyers_id and fyers_pin and totp_key),
+        "redirectUri": get_fyers_redirect_uri(),
         "fyersInitialized": fyers is not None,
         "envUpdatedAt": datetime.fromtimestamp(env_mtime).strftime("%d-%m-%Y %H:%M:%S") if env_mtime else "",
         "rateLimited": cooldown_seconds > 0,
@@ -6830,14 +6838,14 @@ def fyers_login_url():
     refresh_fyers_from_env()
     client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
     secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
-    redirect_uri = "https://trade.fyers.in/api-login/redirect-uri/index.html"
+    redirect_uri = get_fyers_redirect_uri()
 
     if not fyersModel:
         return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
     if not client_id or not secret_key:
         return jsonify({
             "ok": False,
-            "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY in backend/.env.",
+            "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY. On Render, add them in Environment Variables.",
             **get_fyers_env_status(),
         }), 200
 
@@ -6864,7 +6872,7 @@ def fyers_save_token():
     direct_token = (payload.get("accessToken") or payload.get("token") or "").strip()
     client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
     secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
-    redirect_uri = "https://trade.fyers.in/api-login/redirect-uri/index.html"
+    redirect_uri = get_fyers_redirect_uri()
 
     if direct_token:
         access_token = normalize_fyers_access_token(client_id, direct_token)
@@ -6888,7 +6896,7 @@ def fyers_save_token():
     if not fyersModel:
         return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
     if not client_id or not secret_key:
-        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY in backend/.env."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY. On Render, add them in Environment Variables."}), 200
     if not auth_code:
         return jsonify({"ok": False, "error": "Paste the final Fyers redirect URL or auth_code."}), 200
 

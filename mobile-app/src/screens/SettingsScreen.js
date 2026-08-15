@@ -17,7 +17,7 @@ import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { getStoredSettings, setStoredSetting } from '../services/storage';
+import { getStoredSettings, setStoredSetting, normalizeServerUrl } from '../services/storage';
 import { soundManager } from '../components/AudioAlertHelper';
 import { ServerSettingsModal } from '../components/ServerSettingsModal';
 import { useTheme } from '../context/ThemeContext';
@@ -45,7 +45,8 @@ export const SettingsScreen = () => {
     try {
       setTotpLoading(true);
       isProcessingRef.current = false;
-      const resp = await fetch(`${serverUrl}/api/fyers/login-url`);
+      const targetUrl = normalizeServerUrl(serverUrl);
+      const resp = await fetch(`${targetUrl}/api/fyers/login-url`);
       const data = await resp.json();
       if (data.loginUrl) {
         setLoginUrl(data.loginUrl);
@@ -78,7 +79,8 @@ export const SettingsScreen = () => {
   const handleSubmitAuthCode = async (finalUrl) => {
     setTotpLoading(true);
     try {
-      const resp = await fetch(`${serverUrl}/api/fyers/save-token`, {
+      const targetUrl = normalizeServerUrl(serverUrl);
+      const resp = await fetch(`${targetUrl}/api/fyers/save-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ authCode: finalUrl })
@@ -389,6 +391,10 @@ export const SettingsScreen = () => {
           <WebView
             source={{ uri: loginUrl }}
             onNavigationStateChange={onWebViewNavigation}
+            onShouldStartLoadWithRequest={(request) => {
+              onWebViewNavigation(request);
+              return true;
+            }}
             startInLoadingState={true}
             renderLoading={() => (
               <View style={styles.webViewLoader}>

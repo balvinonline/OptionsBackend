@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { getDefaultServerUrl, getStoredAuth, getStoredServerUrl } from './storage';
+import { getDefaultServerUrl, getStoredAuth, getStoredServerUrl, normalizeServerUrl } from './storage';
 
 let currentServerUrl = getDefaultServerUrl();
 
@@ -9,7 +9,7 @@ getStoredServerUrl().then((url) => {
 });
 
 export const setApiBaseUrl = (url) => {
-  currentServerUrl = url.replace(/\/+$/, '');
+  currentServerUrl = normalizeServerUrl(url);
 };
 
 export const getApiBaseUrl = () => currentServerUrl;
@@ -46,7 +46,7 @@ export const api = {
 
   // Health / Connection Test
   checkHealth: async (customUrl) => {
-    const url = (customUrl || currentServerUrl).replace(/\/+$/, '') + '/api/health';
+    const url = normalizeServerUrl(customUrl || currentServerUrl) + '/api/health';
     const res = await axios.get(url, { timeout: 4000 });
     return res.data;
   },
