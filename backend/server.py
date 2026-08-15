@@ -1398,6 +1398,42 @@ def compute_session_vwap(candles):
     return None
 
 
+def compute_session_volume_snapshot(candles):
+    clean = [
+        row for row in (candles or [])
+        if isinstance(row, dict)
+        and safe_int(row.get("ts"), None) is not None
+    ]
+    if not clean:
+        return {}
+
+    latest_dt = datetime.fromtimestamp(safe_int(clean[-1].get("ts"), 0))
+    session_start = latest_dt.replace(hour=9, minute=15, second=0, microsecond=0)
+    session_rows = [
+        row for row in clean
+        if datetime.fromtimestamp(safe_int(row.get("ts"), 0)).date() == latest_dt.date()
+        and datetime.fromtimestamp(safe_int(row.get("ts"), 0)) >= session_start
+        and safe_float(row.get("volume"), None) is not None
+    ]
+    if not session_rows:
+        session_rows = [
+            row for row in clean[-80:]
+            if safe_float(row.get("volume"), None) is not None
+        ]
+
+    volumes = [safe_float(row.get("volume"), 0) or 0 for row in session_rows]
+    latest_volume = volumes[-1] if volumes else None
+    prev_volumes = volumes[-13:-1] if len(volumes) >= 2 else []
+    avg_volume = (sum(prev_volumes) / len(prev_volumes)) if prev_volumes else None
+    ratio = (latest_volume / avg_volume) if latest_volume is not None and avg_volume not in (None, 0) else None
+
+    return {
+        "latestVolume": round2(latest_volume),
+        "averageVolume": round2(avg_volume),
+        "volumeRatio": round2(ratio),
+    }
+
+
 def get_intraday_history_snapshot(symbol_key, price=None):
     try:
         history = fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=900)
@@ -1405,12 +1441,14 @@ def get_intraday_history_snapshot(symbol_key, price=None):
             return {}
         candles = history.get("candles") or []
         vwap = compute_session_vwap(candles)
+        volume_snapshot = compute_session_volume_snapshot(candles)
         latest = candles[-1] if candles else {}
         latest_close = safe_float(latest.get("close"), None) if isinstance(latest, dict) else None
         ref_price = price if price is not None else latest_close
         return {
             "ltp": latest_close,
             "vwap": clean_vwap_for_price(vwap, ref_price, max_distance_pct=2.25),
+            **volume_snapshot,
             "source": "history_5m",
         }
     except Exception as e:
@@ -1420,6 +1458,156 @@ def get_intraday_history_snapshot(symbol_key, price=None):
 
 def get_intraday_history_vwap(symbol_key, price=None):
     return get_intraday_history_snapshot(symbol_key, price).get("vwap")
+
+
+def infer_option_strike_step(rows):
+    strikes = sorted(set(
+        safe_float(row.get("strike"), None)
+        for row in rows or []
+        if safe_float(row.get("strike"), None) is not None
+    ))
+    diffs = [
+        round2(strikes[i] - strikes[i - 1])
+        for i in range(1, len(strikes))
+        if strikes[i] > strikes[i - 1]
+    ]
+    return safe_float(diffs[len(diffs) // 2], 50) if diffs else 50
+
+
+def build_trade_zones(spot, future, analytics, chain, history_snapshot=None):
+    ref = safe_float((future or {}).get("ltp"), None)
+    if ref is None:
+        ref = safe_float((spot or {}).get("ltp"), None)
+
+    vwap = safe_float((analytics or {}).get("vwap"), None)
+    pcr = safe_float((analytics or {}).get("pcr"), None)
+    net_oi = safe_float((analytics or {}).get("netOiChange"), None)
+    supports = sorted([
+        safe_float(x, None)
+        for x in ((analytics or {}).get("supports") or [])
+        if safe_float(x, None) is not None
+    ])
+    resistances = sorted([
+        safe_float(x, None)
+        for x in ((analytics or {}).get("resistances") or [])
+        if safe_float(x, None) is not None
+    ])
+
+    support = None
+    resistance = None
+    if ref is not None:
+        lower = [x for x in supports if x <= ref]
+        upper = [x for x in resistances if x >= ref]
+        support = lower[-1] if lower else (supports[-1] if supports else None)
+        resistance = upper[0] if upper else (resistances[0] if resistances else None)
+
+    step = infer_option_strike_step(chain)
+    buffer_points = max((ref or 0) * 0.0012, step * 0.15, 1)
+
+    near_rows = []
+    if ref is not None:
+        near_rows = [
+            row for row in chain or []
+            if safe_float(row.get("strike"), None) is not None
+            and abs(safe_float(row.get("strike"), ref) - ref) <= step * 3
+        ]
+    if not near_rows:
+        near_rows = chain or []
+
+    ce_volume = sum(num_int(row.get("ce_volume"), 0) for row in near_rows)
+    pe_volume = sum(num_int(row.get("pe_volume"), 0) for row in near_rows)
+    option_volume_total = ce_volume + pe_volume
+    option_volume_side = "CE" if ce_volume > pe_volume * 1.08 else "PE" if pe_volume > ce_volume * 1.08 else "MIXED"
+
+    history_ratio = safe_float((history_snapshot or {}).get("volumeRatio"), None)
+    spot_volume = safe_float((spot or {}).get("volume"), None)
+    future_volume = safe_float((future or {}).get("volume"), None)
+    volume_ready = bool(option_volume_total > 0 and (history_ratio is None or history_ratio >= 0.75))
+
+    price_side = "MIXED"
+    if ref is not None and vwap is not None:
+        if ref >= vwap + buffer_points:
+            price_side = "CE"
+        elif ref <= vwap - buffer_points:
+            price_side = "PE"
+
+    if price_side == "MIXED" and ref is not None:
+        if resistance is not None and ref >= resistance + buffer_points:
+            price_side = "CE"
+        elif support is not None and ref <= support - buffer_points:
+            price_side = "PE"
+
+    oi_side = "MIXED"
+    if pcr is not None:
+        if pcr >= 1.02:
+            oi_side = "CE"
+        elif pcr <= 0.98:
+            oi_side = "PE"
+    if oi_side == "MIXED" and net_oi is not None:
+        if net_oi > 0:
+            oi_side = "CE"
+        elif net_oi < 0:
+            oi_side = "PE"
+
+    zone = "Trap Zone"
+    side = "WAIT"
+    tone = "trap"
+    if price_side == "CE" and option_volume_side in ("CE", "MIXED") and oi_side in ("CE", "MIXED") and volume_ready:
+        zone = "Buy Zone"
+        side = "CE"
+        tone = "buy"
+    elif price_side == "PE" and option_volume_side in ("PE", "MIXED") and oi_side in ("PE", "MIXED") and volume_ready:
+        zone = "Sell Zone"
+        side = "PE"
+        tone = "sell"
+
+    blockers = []
+    if price_side == "MIXED":
+        blockers.append("Price not clear")
+    if vwap is None:
+        blockers.append("VWAP missing")
+    if oi_side not in (side, "MIXED") and side != "WAIT":
+        blockers.append("OI against")
+    if option_volume_side not in (side, "MIXED") and side != "WAIT":
+        blockers.append("Volume against")
+    if not volume_ready:
+        blockers.append("Volume weak")
+    if zone == "Trap Zone" and not blockers:
+        blockers.append("Signals mixed")
+
+    return {
+        "zone": zone,
+        "side": side,
+        "tone": tone,
+        "priceSide": price_side,
+        "oiSide": oi_side,
+        "volumeSide": option_volume_side,
+        "volumeReady": volume_ready,
+        "support": round2(support),
+        "resistance": round2(resistance),
+        "vwap": round2(vwap),
+        "buffer": round2(buffer_points),
+        "pcr": round2(pcr),
+        "netOiChange": round2(net_oi),
+        "ceVolume": ce_volume,
+        "peVolume": pe_volume,
+        "historyVolumeRatio": round2(history_ratio),
+        "spotVolume": round2(spot_volume),
+        "futureVolume": round2(future_volume),
+        "message": (
+            "CE allowed" if zone == "Buy Zone"
+            else "PE allowed" if zone == "Sell Zone"
+            else "Wait"
+        ),
+        "reason": (
+            "Price, OI and volume support CE."
+            if zone == "Buy Zone"
+            else "Price, OI and volume support PE."
+            if zone == "Sell Zone"
+            else "Do not trade until price, OI and volume match."
+        ),
+        "blockers": blockers[:4],
+    }
 
 
 def quote_response_rate_limited(resp):
@@ -3209,7 +3397,8 @@ def build_dashboard(symbol_key, cache_ttl=10):
 
     spot["vwap"] = round2(clean_vwap_for_price(spot.get("vwap"), spot_ltp))
     future["vwap"] = round2(clean_vwap_for_price(future.get("vwap"), future_ltp or spot_ltp))
-    history_vwap = get_intraday_history_vwap(symbol_key, spot_ltp or future_ltp)
+    history_snapshot = get_intraday_history_snapshot(symbol_key, spot_ltp or future_ltp)
+    history_vwap = history_snapshot.get("vwap")
     if spot.get("vwap") is None and history_vwap is not None:
         spot["vwap"] = round2(history_vwap)
         spot["vwap_source"] = "history_5m"
@@ -3419,6 +3608,7 @@ def build_dashboard(symbol_key, cache_ttl=10):
         "fiiDii": fetch_fii_derivatives_data(),
     }
 
+    analytics["tradeZones"] = build_trade_zones(spot, future, analytics, chain, history_snapshot)
     analytics["tradeSignalPanel"] = build_trade_signal_panel(spot, future, analytics, ad)
     analytics["tradeSignals"] = build_trade_signals(spot, future, analytics, ad)
 

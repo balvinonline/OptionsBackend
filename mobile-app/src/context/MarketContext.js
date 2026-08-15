@@ -43,6 +43,7 @@ export const MarketProvider = ({ children }) => {
   const [isConnected, setIsConnected] = useState(false);
 
   const prevSignalRef = useRef(null);
+  const prevZoneRef = useRef({});
   const selectedIndexRef = useRef('NIFTY');
   const [marketDataCache, setMarketDataCache] = useState({});
 
@@ -348,6 +349,20 @@ export const MarketProvider = ({ children }) => {
     setPcrBuckets15m((prev) => addOrUpdateBucket(prev, bucket15m, 15));
   };
 
+  const handleZoneAlert = (indexName, normData) => {
+    const zone = normData?.analytics?.tradeZones;
+    if (!zone?.zone) return;
+
+    const zoneKey = `${zone.zone}:${zone.side || 'WAIT'}`;
+    const prevZoneKey = prevZoneRef.current[indexName];
+    if (prevZoneKey && prevZoneKey !== zoneKey) {
+      soundManager.triggerSignalAlert(
+        zone.side === 'CE' ? 'BULLISH' : zone.side === 'PE' ? 'BEARISH' : 'NEUTRAL'
+      );
+    }
+    prevZoneRef.current[indexName] = zoneKey;
+  };
+
   // Fetch full data for selected index
   const fetchData = async (isManual = false) => {
     const requestedIndex = selectedIndexRef.current;
@@ -361,6 +376,7 @@ export const MarketProvider = ({ children }) => {
         setMarketData(normalized);
         setMarketDataCache((prev) => ({ ...prev, [requestedIndex]: normalized }));
         updatePcrBuckets(normalized);
+        handleZoneAlert(requestedIndex, normalized);
         setIsConnected(true);
         setError('');
         setLastUpdated(formatTime());
@@ -376,6 +392,7 @@ export const MarketProvider = ({ children }) => {
           setMarketData(normalized);
           setMarketDataCache((prev) => ({ ...prev, [requestedIndex]: normalized }));
           updatePcrBuckets(normalized);
+          handleZoneAlert(requestedIndex, normalized);
           setIsConnected(true);
           setError('');
           setLastUpdated(formatTime());

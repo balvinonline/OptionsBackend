@@ -6,6 +6,7 @@ import {
   ScrollView,
   RefreshControl,
   TouchableOpacity,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMarket } from '../context/MarketContext';
@@ -23,9 +24,29 @@ export const DashboardScreen = ({ onNavigate }) => {
   const styles = getStyles(theme);
   const { selectedIndex, marketData, signalAnalysis, tradeGateAnalysis, atm, isRefreshing, refresh, error } = useMarket();
   const [showSettings, setShowSettings] = useState(false);
+  const [showZonePopup, setShowZonePopup] = useState(false);
 
   const topSupport = marketData?.support || [];
   const topRes = marketData?.resistance || [];
+  const tradeZone = marketData?.analytics?.tradeZones;
+  const zoneTone = tradeZone?.tone || 'trap';
+  const zoneColor = zoneTone === 'buy' ? theme.colors.bullish : zoneTone === 'sell' ? theme.colors.bearish : theme.colors.warning;
+  const zoneBg = zoneTone === 'buy' ? theme.colors.bullishBg : zoneTone === 'sell' ? theme.colors.bearishBg : theme.colors.warningBg;
+  const zoneBorder = zoneTone === 'buy' ? theme.colors.bullishBorder : zoneTone === 'sell' ? theme.colors.bearishBorder : theme.colors.warning;
+
+  const formatLevel = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '-';
+  };
+
+  const formatVolume = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num === 0) return '-';
+    if (Math.abs(num) >= 10000000) return `${(num / 10000000).toFixed(2)}Cr`;
+    if (Math.abs(num) >= 100000) return `${(num / 100000).toFixed(2)}L`;
+    if (Math.abs(num) >= 1000) return `${(num / 1000).toFixed(1)}K`;
+    return String(Math.round(num));
+  };
 
   return (
     <View style={styles.container}>
@@ -61,6 +82,31 @@ export const DashboardScreen = ({ onNavigate }) => {
             </Text>
           </View>
         )}
+
+        {tradeZone ? (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={[styles.zoneCard, { backgroundColor: zoneBg, borderColor: zoneBorder }]}
+            onPress={() => setShowZonePopup(true)}
+          >
+            <View style={styles.zoneHeader}>
+              <View>
+                <Text style={styles.zoneLabel}>CURRENT ZONE</Text>
+                <Text style={[styles.zoneTitle, { color: zoneColor }]}>{tradeZone.zone}</Text>
+              </View>
+              <View style={[styles.zoneSidePill, { backgroundColor: zoneColor }]}>
+                <Text style={styles.zoneSideText}>{tradeZone.side || 'WAIT'}</Text>
+              </View>
+            </View>
+            <Text style={styles.zoneReason}>{tradeZone.reason}</Text>
+            <View style={styles.zoneMiniGrid}>
+              <Text style={styles.zoneMiniText}>VWAP {formatLevel(tradeZone.vwap)}</Text>
+              <Text style={styles.zoneMiniText}>S {formatLevel(tradeZone.support)}</Text>
+              <Text style={styles.zoneMiniText}>R {formatLevel(tradeZone.resistance)}</Text>
+              <Text style={styles.zoneMiniText}>Vol {tradeZone.volumeSide}</Text>
+            </View>
+          </TouchableOpacity>
+        ) : null}
 
         {/* KPI Spotlight */}
         <KpiCard data={marketData} atm={atm} />
@@ -154,6 +200,58 @@ export const DashboardScreen = ({ onNavigate }) => {
       </ScrollView>
 
       <ServerSettingsModal visible={showSettings} onClose={() => setShowSettings(false)} />
+
+      <Modal visible={showZonePopup} transparent animationType="fade" onRequestClose={() => setShowZonePopup(false)}>
+        <View style={styles.zoneModalOverlay}>
+          <View style={styles.zoneModal}>
+            <View style={styles.zoneModalHead}>
+              <Text style={styles.zoneModalTitle}>{tradeZone?.zone || 'Trade Zone'}</Text>
+              <TouchableOpacity style={styles.zoneCloseBtn} onPress={() => setShowZonePopup(false)}>
+                <Text style={styles.zoneCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.zoneModalReason}>{tradeZone?.reason || 'Waiting for clean data.'}</Text>
+
+            <View style={styles.zoneDetailGrid}>
+              <View style={styles.zoneDetailBox}>
+                <Text style={styles.zoneDetailLabel}>Side</Text>
+                <Text style={[styles.zoneDetailValue, { color: zoneColor }]}>{tradeZone?.side || 'WAIT'}</Text>
+              </View>
+              <View style={styles.zoneDetailBox}>
+                <Text style={styles.zoneDetailLabel}>Price</Text>
+                <Text style={styles.zoneDetailValue}>{tradeZone?.priceSide || '-'}</Text>
+              </View>
+              <View style={styles.zoneDetailBox}>
+                <Text style={styles.zoneDetailLabel}>OI</Text>
+                <Text style={styles.zoneDetailValue}>{tradeZone?.oiSide || '-'}</Text>
+              </View>
+              <View style={styles.zoneDetailBox}>
+                <Text style={styles.zoneDetailLabel}>Volume</Text>
+                <Text style={styles.zoneDetailValue}>{tradeZone?.volumeSide || '-'}</Text>
+              </View>
+            </View>
+
+            <View style={styles.zoneLevelGrid}>
+              <Text style={styles.zoneLevelText}>Support: {formatLevel(tradeZone?.support)}</Text>
+              <Text style={styles.zoneLevelText}>Resistance: {formatLevel(tradeZone?.resistance)}</Text>
+              <Text style={styles.zoneLevelText}>VWAP: {formatLevel(tradeZone?.vwap)}</Text>
+              <Text style={styles.zoneLevelText}>PCR: {formatLevel(tradeZone?.pcr)}</Text>
+              <Text style={styles.zoneLevelText}>CE Vol: {formatVolume(tradeZone?.ceVolume)}</Text>
+              <Text style={styles.zoneLevelText}>PE Vol: {formatVolume(tradeZone?.peVolume)}</Text>
+            </View>
+
+            {tradeZone?.blockers?.length ? (
+              <View style={styles.zoneBlockers}>
+                <Text style={styles.zoneBlockerTitle}>Wait Reason</Text>
+                {tradeZone.blockers.map((item, idx) => (
+                  <Text key={`${item}-${idx}`} style={styles.zoneBlockerText}>{item}</Text>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -187,6 +285,168 @@ const getStyles = (theme) => StyleSheet.create({
     marginHorizontal: 14,
     marginTop: 10,
     gap: 8,
+  },
+  zoneCard: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+  },
+  zoneHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  zoneLabel: {
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  zoneTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  zoneSidePill: {
+    minWidth: 58,
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  zoneSideText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  zoneReason: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 6,
+  },
+  zoneMiniGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 9,
+  },
+  zoneMiniText: {
+    color: theme.colors.textPrimary,
+    backgroundColor: theme.colors.bgCardSolid,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    borderRadius: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  zoneModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  zoneModal: {
+    backgroundColor: theme.colors.bgCardSolid,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 16,
+    padding: 14,
+  },
+  zoneModalHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  zoneModalTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  zoneCloseBtn: {
+    backgroundColor: theme.colors.bgDark,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  zoneCloseText: {
+    color: theme.colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  zoneModalReason: {
+    color: theme.colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  zoneDetailGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  zoneDetailBox: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    backgroundColor: theme.colors.bgDark,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    borderRadius: 10,
+    padding: 10,
+  },
+  zoneDetailLabel: {
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  zoneDetailValue: {
+    color: theme.colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  zoneLevelGrid: {
+    marginTop: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  zoneLevelText: {
+    color: theme.colors.textSecondary,
+    backgroundColor: theme.colors.bgCard,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  zoneBlockers: {
+    marginTop: 12,
+    backgroundColor: theme.colors.warningBg,
+    borderRadius: 10,
+    padding: 10,
+  },
+  zoneBlockerTitle: {
+    color: theme.colors.warning,
+    fontSize: 11,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  zoneBlockerText: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
   },
   quickActionCard: {
     flex: 1,
