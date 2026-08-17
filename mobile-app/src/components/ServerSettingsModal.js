@@ -23,6 +23,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const FYERS_LOGIN_URL_CACHE_KEY = 'FYERS_LOGIN_URL_CACHE';
 
+const buildFyersTokenPayload = (input = '') => {
+  const value = String(input || '').trim();
+  if (value.includes('auth_code=') || value.includes('code=') || value.startsWith('http')) {
+    return { authCode: value };
+  }
+  return { accessToken: value };
+};
+
 export const ServerSettingsModal = ({ visible, onClose }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
@@ -150,7 +158,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
           'Bypass-Tunnel-Reminder': 'true',
           'localtunnel-bypass': 'true'
         },
-        body: JSON.stringify({ authCode: finalUrl })
+        body: JSON.stringify(buildFyersTokenPayload(finalUrl))
       });
       const data = await resp.json();
       if (data.ok) {

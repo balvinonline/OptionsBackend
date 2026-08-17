@@ -24,6 +24,14 @@ import { useTheme } from '../context/ThemeContext';
 
 const FYERS_LOGIN_URL_CACHE_KEY = 'FYERS_LOGIN_URL_CACHE';
 
+const buildFyersTokenPayload = (input = '') => {
+  const value = String(input || '').trim();
+  if (value.includes('auth_code=') || value.includes('code=') || value.startsWith('http')) {
+    return { authCode: value };
+  }
+  return { accessToken: value };
+};
+
 export const SettingsScreen = () => {
   const { currentUser, logout, serverUrl } = useAuth();
   const { theme } = useTheme();
@@ -111,7 +119,7 @@ export const SettingsScreen = () => {
       const resp = await fetch(`${targetUrl}/api/fyers/save-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ authCode: finalUrl })
+        body: JSON.stringify(buildFyersTokenPayload(finalUrl))
       });
       const data = await resp.json();
       if (data.ok) {
