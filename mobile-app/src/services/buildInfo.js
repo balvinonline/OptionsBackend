@@ -1,1 +1,1 @@
-export const APP_BUILD_LABEL = 'token-fast-ad92000';
+export const APP_BUILD_LABEL = 'mobile-token-timeout-20260817';
