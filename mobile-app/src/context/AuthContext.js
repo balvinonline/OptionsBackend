@@ -25,18 +25,16 @@ export const AuthProvider = ({ children }) => {
         }
         setIsAuthenticated(true);
 
-        // Auto-wake Render backend if we have a cached Fyers token
-        try {
-          const { default: AsyncStorage } = require('@react-native-async-storage/async-storage');
-          const cachedToken = await AsyncStorage.getItem('FYERS_CACHED_TOKEN');
-          if (cachedToken && storedUrl) {
-            await fetch(`${storedUrl}/api/fyers/save-token`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ accessToken: cachedToken })
-            });
-          }
-        } catch(e) {}
+        // Do not auto-save the Fyers token on startup. It can make the app feel
+        // stuck when Render is waking, even though the token is already active.
+        if (storedUrl) {
+          fetch(`${storedUrl}/api/health`, {
+            headers: {
+              'Bypass-Tunnel-Reminder': 'true',
+              'localtunnel-bypass': 'true',
+            },
+          }).catch(() => {});
+        }
       } catch (e) {
         console.error('Init Auth error:', e);
       } finally {
