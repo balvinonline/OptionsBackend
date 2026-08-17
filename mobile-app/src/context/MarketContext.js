@@ -37,6 +37,38 @@ const firstFiniteNumber = (...values) => {
   return null;
 };
 
+const calculateEmaSeries = (values = [], period = 9) => {
+  const clean = values.map(Number).filter(Number.isFinite);
+  if (clean.length === 0) return [];
+  const multiplier = 2 / (period + 1);
+  const out = [];
+  clean.forEach((value, index) => {
+    if (index === 0) out.push(value);
+    else out.push((value - out[index - 1]) * multiplier + out[index - 1]);
+  });
+  return out;
+};
+
+const average = (values = []) => {
+  const clean = values.map(Number).filter((value) => Number.isFinite(value) && value > 0);
+  if (!clean.length) return 0;
+  return clean.reduce((sum, value) => sum + value, 0) / clean.length;
+};
+
+const nearestAbove = (levels = [], spot = 0) => {
+  return levels
+    .map((item) => Number(item?.strike ?? item))
+    .filter((level) => Number.isFinite(level) && level >= spot)
+    .sort((a, b) => a - b)[0] || null;
+};
+
+const nearestBelow = (levels = [], spot = 0) => {
+  return levels
+    .map((item) => Number(item?.strike ?? item))
+    .filter((level) => Number.isFinite(level) && level <= spot)
+    .sort((a, b) => b - a)[0] || null;
+};
+
 const normalizeTickPayload = (payload) => {
   if (!payload) return null;
   const tick = payload.tick || payload;
@@ -84,6 +116,7 @@ export const MarketProvider = ({ children }) => {
   const [signalJournal, setSignalJournal] = useState([]);
   const [pcrBuckets5m, setPcrBuckets5m] = useState([]);
   const [pcrBuckets15m, setPcrBuckets15m] = useState([]);
+  const [indexCandles, setIndexCandles] = useState([]);
   const [liveGreeks, setLiveGreeks] = useState({});
   const [whaleAlerts, setWhaleAlerts] = useState([]);
   
@@ -234,6 +267,128 @@ export const MarketProvider = ({ children }) => {
       items,
     };
   }, [marketData, signalAnalysis, atm]);
+
+  const moveConfirmation = useMemo(() => {
+    const spot = Number(marketData?.spot || 0);
+    const chain = marketData?.chain || marketData?.optionChain || [];
+    const tradeZone = marketData?.analytics?.tradeZones || {};
+    const vwap = firstFiniteNumber(
+      tradeZone.vwap,
+      marketData?.analytics?.vwap,
+      marketData?.future?.vwap,
+      marketData?.spot_vwap
+    );
+
+    const closes = (indexCandles || [])
+      .map((row) => Number(row.close ?? row.c ?? row[4]))
+      .filter(Number.isFinite);
+    const liveCloses = spot ? [...closes.slice(0, -1), spot] : closes;
+    const ema9 = calculateEmaSeries(liveCloses, 9);
+    const ema21 = calculateEmaSeries(liveCloses, 21);
+    const fastNow = ema9[ema9.length - 1];
+    const slowNow = ema21[ema21.length - 1];
+    const fastPrev = ema9[ema9.length - 2];
+    const slowPrev = ema21[ema21.length - 2];
+    const emaGapPct = slowNow ? Math.abs(fastNow - slowNow) / slowNow : 0;
+
+    let emaSide = 'WAIT';
+    if (Number.isFinite(fastNow) && Number.isFinite(slowNow) && emaGapPct > 0.00035) {
+      emaSide = fastNow > slowNow ? 'CE' : 'PE';
+    }
+
+    const crossedUp = Number.isFinite(fastPrev) && Number.isFinite(slowPrev) && fastPrev <= slowPrev && fastNow > slowNow;
+    const crossedDown = Number.isFinite(fastPrev) && Number.isFinite(slowPrev) && fastPrev >= slowPrev && fastNow < slowNow;
+    const priceSide = vwap && spot ? (spot > vwap ? 'CE' : spot < vwap ? 'PE' : 'WAIT') : 'WAIT';
+
+    const volumes = (indexCandles || []).map((row) => Number(row.volume ?? row.v ?? row[5])).filter(Number.isFinite);
+    const lastVolume = volumes[volumes.length - 1] || 0;
+    const avgVolume = average(volumes.slice(-21, -1));
+    const volumeRatio = avgVolume ? lastVolume / avgVolume : 0;
+    const volumeStatus = volumeRatio >= 1.25 ? 'Strong' : volumeRatio >= 0.85 ? 'Normal' : 'Weak';
+
+    const nearRows = atm
+      ? chain.filter((row) => Math.abs(Number(row.strike) - Number(atm)) <= Math.max(50, Number(atm) * 0.01))
+      : chain.slice(0, 5);
+    const ceVolume = nearRows.reduce((sum, row) => sum + Number(row.ce_volume || row.volume_CE || row.ce_vol || 0), 0);
+    const peVolume = nearRows.reduce((sum, row) => sum + Number(row.pe_volume || row.volume_PE || row.pe_vol || 0), 0);
+    const ceLtp = nearRows.reduce((sum, row) => sum + Number(row.ce_ltp || row.ltp_CE || 0), 0);
+    const peLtp = nearRows.reduce((sum, row) => sum + Number(row.pe_ltp || row.ltp_PE || 0), 0);
+    const premiumSide = ceVolume > peVolume * 1.12 || ceLtp > peLtp * 1.08
+      ? 'CE'
+      : peVolume > ceVolume * 1.12 || peLtp > ceLtp * 1.08
+        ? 'PE'
+        : 'WAIT';
+
+    const support = nearestBelow(marketData?.support || [], spot);
+    const resistance = nearestAbove(marketData?.resistance || [], spot);
+    const wallBuffer = Math.max(18, spot * 0.0015);
+    const wallSide = spot && resistance && support
+      ? ((resistance - spot) > wallBuffer ? 'CE' : (spot - support) > wallBuffer ? 'PE' : 'WAIT')
+      : 'WAIT';
+
+    const pcr = Number(marketData?.pcr_oi || 0);
+    const pcrSide = pcr >= 1.05 ? 'CE' : pcr <= 0.95 ? 'PE' : 'WAIT';
+
+    const counts = { CE: 0, PE: 0 };
+    [emaSide, priceSide, premiumSide, wallSide, pcrSide].forEach((side) => {
+      if (side === 'CE' || side === 'PE') counts[side] += 1;
+    });
+    if (volumeStatus === 'Strong') {
+      if (counts.CE > counts.PE) counts.CE += 1;
+      if (counts.PE > counts.CE) counts.PE += 1;
+    }
+
+    const side = counts.CE >= counts.PE + 2 ? 'CE' : counts.PE >= counts.CE + 2 ? 'PE' : 'WAIT';
+    const isTrap = tradeZone.zone === 'Trap Zone' || priceSide === 'WAIT' || emaSide === 'WAIT';
+    const verdict = side === 'WAIT'
+      ? 'WAIT'
+      : isTrap
+        ? 'WATCH'
+        : Math.max(counts.CE, counts.PE) >= 5
+          ? `TRADE ${side}`
+          : `WATCH ${side}`;
+
+    return {
+      side,
+      verdict,
+      score: Math.max(counts.CE, counts.PE),
+      total: 6,
+      ema: {
+        side: emaSide,
+        label: emaSide === 'CE' ? '9 EMA above 21' : emaSide === 'PE' ? '9 EMA below 21' : 'EMA flat',
+        crossed: crossedUp ? 'Bullish cross' : crossedDown ? 'Bearish cross' : 'No fresh cross',
+      },
+      vwap: {
+        side: priceSide,
+        label: priceSide === 'CE' ? 'Above VWAP' : priceSide === 'PE' ? 'Below VWAP' : 'Near VWAP',
+      },
+      premium: {
+        side: premiumSide,
+        label: premiumSide === 'CE' ? 'CE active' : premiumSide === 'PE' ? 'PE active' : 'Premium mixed',
+      },
+      volume: {
+        status: volumeStatus,
+        ratio: volumeRatio,
+        label: volumeStatus === 'Strong' ? 'Volume strong' : volumeStatus === 'Normal' ? 'Volume normal' : 'Volume weak',
+      },
+      wall: {
+        side: wallSide,
+        label: wallSide === 'CE' ? 'Upside space' : wallSide === 'PE' ? 'Downside space' : 'Wall nearby',
+        support,
+        resistance,
+      },
+      pcr: {
+        side: pcrSide,
+        label: pcrSide === 'CE' ? 'PCR supports CE' : pcrSide === 'PE' ? 'PCR supports PE' : 'PCR neutral',
+        value: pcr,
+      },
+      reason: verdict.startsWith('TRADE')
+        ? `${side} confirmed by EMA, VWAP and option activity.`
+        : verdict.startsWith('WATCH')
+          ? `${side} is forming, wait for clean confirmation.`
+          : 'No clean side yet.',
+    };
+  }, [marketData, indexCandles, atm]);
 
   // Record signals into Signal Journal & Trigger Audio
   useEffect(() => {
@@ -761,6 +916,34 @@ export const MarketProvider = ({ children }) => {
 
   useEffect(() => {
     let isMounted = true;
+    let timer;
+
+    const fetchIndexCandles = async () => {
+      const requestedIndex = selectedIndexRef.current;
+      try {
+        const history = await api.getFyersHistory(requestedIndex, '5');
+        if (!isMounted || requestedIndex !== selectedIndexRef.current) return;
+        const candles = Array.isArray(history?.candles) ? history.candles : [];
+        setIndexCandles(candles.slice(-120));
+      } catch {
+        if (isMounted) setIndexCandles([]);
+      }
+      if (isMounted) {
+        timer = setTimeout(fetchIndexCandles, 60000);
+      }
+    };
+
+    setIndexCandles([]);
+    fetchIndexCandles();
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [selectedIndex]);
+
+  useEffect(() => {
+    let isMounted = true;
     let pollTimeout;
     let auxTimeout;
     let isFetchingMain = false;
@@ -862,6 +1045,7 @@ export const MarketProvider = ({ children }) => {
         signalJournal,
         signalAnalysis,
         tradeGateAnalysis,
+        moveConfirmation,
         pcrBuckets5m,
         pcrBuckets15m,
         bearishDivergence: signalAnalysis?.bearishDivergence || false,

@@ -22,7 +22,7 @@ import { useTheme } from '../context/ThemeContext';
 export const DashboardScreen = ({ onNavigate }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
-  const { selectedIndex, marketData, signalAnalysis, tradeGateAnalysis, atm, isRefreshing, refresh, error } = useMarket();
+  const { selectedIndex, marketData, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
   const [showSettings, setShowSettings] = useState(false);
   const [showZonePopup, setShowZonePopup] = useState(false);
 
@@ -106,6 +106,55 @@ export const DashboardScreen = ({ onNavigate }) => {
               <Text style={styles.zoneMiniText}>Vol {tradeZone.volumeSide}</Text>
             </View>
           </TouchableOpacity>
+        ) : null}
+
+        {moveConfirmation ? (
+          <View style={styles.confirmCard}>
+            <View style={styles.confirmTopRow}>
+              <View>
+                <Text style={styles.confirmLabel}>MOVE CONFIRMATION</Text>
+                <Text
+                  style={[
+                    styles.confirmTitle,
+                    moveConfirmation.side === 'CE'
+                      ? { color: theme.colors.bullish }
+                      : moveConfirmation.side === 'PE'
+                        ? { color: theme.colors.bearish }
+                        : { color: theme.colors.warning },
+                  ]}
+                >
+                  {moveConfirmation.verdict}
+                </Text>
+              </View>
+              <Text style={styles.confirmScore}>{moveConfirmation.score}/{moveConfirmation.total}</Text>
+            </View>
+            <Text style={styles.confirmReason}>{moveConfirmation.reason}</Text>
+            <View style={styles.confirmGrid}>
+              {[
+                ['EMA', moveConfirmation.ema?.label, moveConfirmation.ema?.side],
+                ['VWAP', moveConfirmation.vwap?.label, moveConfirmation.vwap?.side],
+                ['Premium', moveConfirmation.premium?.label, moveConfirmation.premium?.side],
+                ['Volume', moveConfirmation.volume?.label, moveConfirmation.volume?.status],
+                ['Wall', moveConfirmation.wall?.label, moveConfirmation.wall?.side],
+                ['PCR', moveConfirmation.pcr?.label, moveConfirmation.pcr?.side],
+              ].map(([label, value, tone]) => {
+                const isCe = tone === 'CE' || tone === 'Strong';
+                const isPe = tone === 'PE';
+                return (
+                  <View
+                    key={label}
+                    style={[
+                      styles.confirmChip,
+                      isCe ? styles.confirmChipBull : isPe ? styles.confirmChipBear : styles.confirmChipWait,
+                    ]}
+                  >
+                    <Text style={styles.confirmChipLabel}>{label}</Text>
+                    <Text style={styles.confirmChipValue} numberOfLines={1}>{value || '-'}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
         ) : null}
 
         {/* KPI Spotlight */}
@@ -344,6 +393,85 @@ const getStyles = (theme) => StyleSheet.create({
     paddingVertical: 4,
     fontSize: 11,
     fontWeight: '800',
+  },
+  confirmCard: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    backgroundColor: theme.colors.bgCardSolid,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 12,
+    padding: 11,
+  },
+  confirmTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  confirmLabel: {
+    color: theme.colors.textMuted,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  confirmTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  confirmScore: {
+    color: theme.colors.textPrimary,
+    backgroundColor: theme.colors.bgDark,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  confirmReason: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 5,
+  },
+  confirmGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 9,
+  },
+  confirmChip: {
+    width: '48%',
+    borderRadius: 9,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    borderWidth: 1,
+  },
+  confirmChipBull: {
+    backgroundColor: theme.colors.bullishBg,
+    borderColor: theme.colors.bullishBorder,
+  },
+  confirmChipBear: {
+    backgroundColor: theme.colors.bearishBg,
+    borderColor: theme.colors.bearishBorder,
+  },
+  confirmChipWait: {
+    backgroundColor: theme.colors.bgCard,
+    borderColor: theme.colors.borderLight,
+  },
+  confirmChipLabel: {
+    color: theme.colors.textMuted,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  confirmChipValue: {
+    color: theme.colors.textPrimary,
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 2,
   },
   zoneModalOverlay: {
     flex: 1,
