@@ -25,6 +25,10 @@ const FYERS_LOGIN_URL_CACHE_KEY = 'FYERS_LOGIN_URL_CACHE';
 
 const buildFyersTokenPayload = (input = '') => {
   const value = String(input || '').trim();
+  const tokenMatch = value.match(/[?&]access_token=([^&\s]+)/i);
+  if (tokenMatch) {
+    return { accessToken: decodeURIComponent(tokenMatch[1]) };
+  }
   if (value.includes('auth_code=') || value.includes('code=') || value.startsWith('http')) {
     return { authCode: value };
   }
@@ -55,8 +59,9 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const [showWebView, setShowWebView] = useState(false);
   const [loginUrl, setLoginUrl] = useState('');
   const [authInput, setAuthInput] = useState('');
+  const [cachedTokenPresent, setCachedTokenPresent] = useState(false);
   const isProcessingRef = useRef(false);
-  const tokenIsActive = hasActiveFyersToken(totpStatus);
+  const tokenIsActive = cachedTokenPresent || hasActiveFyersToken(totpStatus);
 
   React.useEffect(() => {
     if (visible) {
@@ -64,6 +69,9 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
       getStoredSettings().then((s) => {
         setSoundEnabled(s.soundEnabled);
         setHapticEnabled(s.hapticEnabled);
+      });
+      AsyncStorage.getItem('FYERS_CACHED_TOKEN').then((token) => {
+        setCachedTokenPresent(Boolean(token));
       });
       checkTokenStatus();
     }
@@ -200,6 +208,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
         setAuthInput('');
         if (data.access_token) {
           await AsyncStorage.setItem('FYERS_CACHED_TOKEN', data.access_token);
+          setCachedTokenPresent(true);
         }
         checkTokenStatus();
       } else {

@@ -26,6 +26,10 @@ const FYERS_LOGIN_URL_CACHE_KEY = 'FYERS_LOGIN_URL_CACHE';
 
 const buildFyersTokenPayload = (input = '') => {
   const value = String(input || '').trim();
+  const tokenMatch = value.match(/[?&]access_token=([^&\s]+)/i);
+  if (tokenMatch) {
+    return { accessToken: decodeURIComponent(tokenMatch[1]) };
+  }
   if (value.includes('auth_code=') || value.includes('code=') || value.startsWith('http')) {
     return { authCode: value };
   }
@@ -58,7 +62,8 @@ export const SettingsScreen = () => {
   const [showWebView, setShowWebView] = useState(false);
   const [loginUrl, setLoginUrl] = useState('');
   const [authInput, setAuthInput] = useState('');
-  const tokenIsActive = hasActiveFyersToken(fyersStatus);
+  const [cachedTokenPresent, setCachedTokenPresent] = useState(false);
+  const tokenIsActive = cachedTokenPresent || hasActiveFyersToken(fyersStatus);
 
   const openFyersLogin = async () => {
     try {
@@ -161,6 +166,7 @@ export const SettingsScreen = () => {
         setAuthInput('');
         if (data.access_token) {
           await AsyncStorage.setItem('FYERS_CACHED_TOKEN', data.access_token);
+          setCachedTokenPresent(true);
         }
         const status = await api.getFyersTokenStatus();
         setFyersStatus(status);
@@ -230,6 +236,9 @@ export const SettingsScreen = () => {
     getStoredSettings().then((s) => {
       setSoundEnabled(s.soundEnabled);
       setHapticEnabled(s.hapticEnabled);
+    });
+    AsyncStorage.getItem('FYERS_CACHED_TOKEN').then((token) => {
+      setCachedTokenPresent(Boolean(token));
     });
 
     api.getFyersTokenStatus()

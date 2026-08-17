@@ -250,6 +250,9 @@ def dashboard_history_summary(payload):
 
 def normalize_fyers_access_token(client_id, access_token):
     token = str(access_token or "").strip()
+    token = token.strip('"').strip("'").strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
     prefix = f"{client_id}:"
     if client_id and token.startswith(prefix):
         return token.split(":", 1)[1].strip()
@@ -7056,7 +7059,7 @@ def fyers_login_url():
 
 @app.route("/api/fyers/save-token", methods=["POST"])
 def fyers_save_token():
-    global _QUOTE_COOLDOWN_UNTIL
+    global _QUOTE_COOLDOWN_UNTIL, FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME
     refresh_fyers_from_env()
     payload = request.get_json(silent=True) or {}
     direct_token = (payload.get("accessToken") or payload.get("token") or "").strip()
@@ -7067,12 +7070,19 @@ def fyers_save_token():
     if direct_token:
         access_token = normalize_fyers_access_token(client_id, direct_token)
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
+        os.environ["FYERS_ACCESS_TOKEN"] = access_token
+        FYERS_CLIENT_ID = client_id
+        FYERS_ACCESS_TOKEN = access_token
+        try:
+            FYERS_ENV_MTIME = ENV_PATH.stat().st_mtime if ENV_PATH.exists() else FYERS_ENV_MTIME
+        except Exception:
+            pass
         _QUOTE_COOLDOWN_UNTIL = 0.0
-        refresh_fyers_from_env(force=True)
         clear_live_market_caches()
         return jsonify({
             "ok": True,
-            "message": "Fyers access token directly saved and activated.",
+            "message": "Fyers access token saved. Live feed will reconnect automatically.",
+            "access_token": access_token,
             **get_fyers_env_status(),
         })
 
