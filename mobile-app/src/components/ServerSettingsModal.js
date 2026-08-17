@@ -21,6 +21,8 @@ import { soundManager } from './AudioAlertHelper';
 import { useTheme } from '../context/ThemeContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const FYERS_LOGIN_URL_CACHE_KEY = 'FYERS_LOGIN_URL_CACHE';
+
 export const ServerSettingsModal = ({ visible, onClose }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
@@ -79,6 +81,17 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
       isProcessingRef.current = false;
       const targetUrl = normalizeServerUrl(inputUrl || serverUrl);
       setInputUrl(targetUrl);
+      const cachedLoginUrl = await AsyncStorage.getItem(FYERS_LOGIN_URL_CACHE_KEY);
+      if (cachedLoginUrl) {
+        setLoginUrl(cachedLoginUrl);
+        await Linking.openURL(cachedLoginUrl);
+        Alert.alert(
+          'Fyers Login Opened',
+          'Complete login in browser. After redirect, copy the final URL or auth_code and paste it here.'
+        );
+        setIsTotpLoading(false);
+        return;
+      }
       const resp = await fetch(`${targetUrl}/api/fyers/login-url`, {
         headers: {
           'Bypass-Tunnel-Reminder': 'true',
@@ -88,6 +101,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
       const data = await resp.json();
       if (data.loginUrl) {
         setLoginUrl(data.loginUrl);
+        await AsyncStorage.setItem(FYERS_LOGIN_URL_CACHE_KEY, data.loginUrl);
         const canOpen = await Linking.canOpenURL(data.loginUrl);
         if (canOpen) {
           await Linking.openURL(data.loginUrl);

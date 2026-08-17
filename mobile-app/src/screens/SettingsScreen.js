@@ -22,6 +22,8 @@ import { soundManager } from '../components/AudioAlertHelper';
 import { ServerSettingsModal } from '../components/ServerSettingsModal';
 import { useTheme } from '../context/ThemeContext';
 
+const FYERS_LOGIN_URL_CACHE_KEY = 'FYERS_LOGIN_URL_CACHE';
+
 export const SettingsScreen = () => {
   const { currentUser, logout, serverUrl } = useAuth();
   const { theme } = useTheme();
@@ -47,10 +49,22 @@ export const SettingsScreen = () => {
       setTotpLoading(true);
       isProcessingRef.current = false;
       const targetUrl = normalizeServerUrl(serverUrl);
+      const cachedLoginUrl = await AsyncStorage.getItem(FYERS_LOGIN_URL_CACHE_KEY);
+      if (cachedLoginUrl) {
+        setLoginUrl(cachedLoginUrl);
+        await Linking.openURL(cachedLoginUrl);
+        Alert.alert(
+          'Fyers Login Opened',
+          'Complete login in browser. After redirect, copy the final URL or auth_code and paste it here.'
+        );
+        setTotpLoading(false);
+        return;
+      }
       const resp = await fetch(`${targetUrl}/api/fyers/login-url`);
       const data = await resp.json();
       if (data.loginUrl) {
         setLoginUrl(data.loginUrl);
+        await AsyncStorage.setItem(FYERS_LOGIN_URL_CACHE_KEY, data.loginUrl);
         const canOpen = await Linking.canOpenURL(data.loginUrl);
         if (canOpen) {
           await Linking.openURL(data.loginUrl);
