@@ -40,10 +40,14 @@ const buildFyersTokenPayload = (input = '') => {
   if (tokenMatch) {
     return { accessToken: decodeURIComponent(tokenMatch[1]) };
   }
-  if (value.includes('auth_code=') || value.includes('code=') || value.startsWith('http')) {
+  const prefixedToken = value.match(/^[A-Z0-9]+(?:-[0-9]+)?:eyJ/i);
+  if (prefixedToken) {
+    return { accessToken: value };
+  }
+  if (value.includes('auth_code=') || value.includes('code=') || value.startsWith('http') || value.startsWith('eyJ')) {
     return { authCode: value };
   }
-  return { accessToken: value };
+  return { authCode: value };
 };
 
 const hasActiveFyersToken = (status) => Boolean(

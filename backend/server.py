@@ -259,6 +259,11 @@ def normalize_fyers_access_token(client_id, access_token):
     return token
 
 
+def looks_like_raw_fyers_auth_code(value):
+    token = str(value or "").strip().strip('"').strip("'")
+    return token.startswith("eyJ") and "." in token and ":" not in token
+
+
 def mark_fyers_token_ready(client_id, access_token):
     global FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME, fyers
     os.environ["FYERS_ACCESS_TOKEN"] = access_token
@@ -7076,6 +7081,10 @@ def fyers_save_token():
     client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
     secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
     redirect_uri = get_fyers_redirect_uri()
+
+    if direct_token and looks_like_raw_fyers_auth_code(direct_token):
+        payload["authCode"] = direct_token
+        direct_token = ""
 
     if direct_token:
         access_token = normalize_fyers_access_token(client_id, direct_token)
