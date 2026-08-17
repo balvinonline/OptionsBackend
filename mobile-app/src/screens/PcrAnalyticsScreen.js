@@ -26,6 +26,17 @@ export const PcrAnalyticsScreen = ({ onNavigate }) => {
 
   const currentPcr = marketData?.pcr_oi ? Number(marketData.pcr_oi).toFixed(2) : '1.00';
 
+  const getSignalMeta = (bucket = {}) => {
+    const raw = String(bucket.optSignal || bucket.optionSignal || '').toUpperCase();
+    if (raw.includes('BULL') || raw.includes('CE')) {
+      return { tone: 'bullish', label: 'BUY CE' };
+    }
+    if (raw.includes('BEAR') || raw.includes('PE')) {
+      return { tone: 'bearish', label: 'BUY PE' };
+    }
+    return { tone: 'neutral', label: 'WAIT' };
+  };
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -60,36 +71,39 @@ export const PcrAnalyticsScreen = ({ onNavigate }) => {
             </View>
 
             {/* Table Rows */}
-            {buckets.map((b, idx) => (
-              <View key={idx} style={styles.tableRow}>
-                <View style={[styles.td, { flex: 1, flexDirection: 'row', alignItems: 'center' }]}>
-                  <Text style={styles.timeText}>{b.timeLabel}</Text>
-                </View>
-                
-                <View style={[styles.td, { flex: 1, alignItems: 'center' }]}>
-                  <Text style={styles.spotText}>{Number(b.spot).toFixed(1)}</Text>
-                </View>
-                
-                <View style={[styles.td, { flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 4 }]}>
-                  <Text style={[styles.pcrText, { color: getPcrColor(b.pcr) }]}>{b.pcr.toFixed(2)}</Text>
-                  {getTrendIcon(b.trend)}
-                </View>
+            {buckets.map((b, idx) => {
+              const signal = getSignalMeta(b);
+              return (
+                <View key={idx} style={styles.tableRow}>
+                  <View style={[styles.td, { flex: 1, flexDirection: 'row', alignItems: 'center' }]}>
+                    <Text style={styles.timeText}>{b.timeLabel}</Text>
+                  </View>
 
-                <View style={[styles.td, { flex: 1, alignItems: 'flex-end' }]}>
-                  <View style={[
-                    styles.signalBadge, 
-                    b.optSignal === 'BULLISH' ? styles.badgeBullish : b.optSignal === 'BEARISH' ? styles.badgeBearish : styles.badgeNeutral
-                  ]}>
-                    <Text style={[
-                      styles.signalText,
-                      b.optSignal === 'BULLISH' ? styles.signalTextBullish : b.optSignal === 'BEARISH' ? styles.signalTextBearish : styles.signalTextNeutral
+                  <View style={[styles.td, { flex: 1, alignItems: 'center' }]}>
+                    <Text style={styles.spotText}>{Number(b.spot).toFixed(1)}</Text>
+                  </View>
+
+                  <View style={[styles.td, { flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 4 }]}>
+                    <Text style={[styles.pcrText, { color: getPcrColor(b.pcr) }]}>{Number(b.pcr || 0).toFixed(2)}</Text>
+                    {getTrendIcon(b.pcrTrend || b.trend)}
+                  </View>
+
+                  <View style={[styles.td, { flex: 1, alignItems: 'flex-end' }]}>
+                    <View style={[
+                      styles.signalBadge,
+                      signal.tone === 'bullish' ? styles.badgeBullish : signal.tone === 'bearish' ? styles.badgeBearish : styles.badgeNeutral
                     ]}>
-                      {b.optSignal}
-                    </Text>
+                      <Text style={[
+                        styles.signalText,
+                        signal.tone === 'bullish' ? styles.signalTextBullish : signal.tone === 'bearish' ? styles.signalTextBearish : styles.signalTextNeutral
+                      ]}>
+                        {signal.label}
+                      </Text>
+                    </View>
                   </View>
                 </View>
-              </View>
-            ))}
+              );
+            })}
           </View>
         )}
       </ScrollView>

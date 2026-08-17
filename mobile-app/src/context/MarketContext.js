@@ -1,11 +1,62 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, getApiBaseUrl } from '../services/api';
 import io from 'socket.io-client';
+import EventSource from 'react-native-sse';
 import { soundManager } from '../components/AudioAlertHelper';
 
 const MarketContext = createContext(null);
 
 export const SUPPORTED_INDEXES = ['NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY'];
+
+const LIVE_INDEXES = ['NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY'];
+
+const INDEX_LABELS = {
+  NIFTY: 'NIFTY 50',
+  BANKNIFTY: 'NIFTY BANK',
+  SENSEX: 'SENSEX',
+  FINNIFTY: 'NIFTY FIN SERVICE',
+  MIDCPNIFTY: 'NIFTY MIDCAP 100',
+};
+
+const normalizeIndexKey = (value = '') => {
+  const text = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!text) return '';
+  if (text.includes('BANKNIFTY') || text.includes('NIFTYBANK')) return 'BANKNIFTY';
+  if (text.includes('SENSEX')) return 'SENSEX';
+  if (text.includes('FINNIFTY') || text.includes('FINSERVICE')) return 'FINNIFTY';
+  if (text.includes('MIDCPNIFTY') || text.includes('MIDCAP')) return 'MIDCPNIFTY';
+  if (text.includes('NIFTY50') || text === 'NIFTY') return 'NIFTY';
+  return '';
+};
+
+const firstFiniteNumber = (...values) => {
+  for (const value of values) {
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+  }
+  return null;
+};
+
+const normalizeTickPayload = (payload) => {
+  if (!payload) return null;
+  const tick = payload.tick || payload;
+  const key = normalizeIndexKey(payload.symbol) || normalizeIndexKey(payload.sourceSymbol) || normalizeIndexKey(tick.symbol);
+  if (!key) return null;
+
+  const ltp = firstFiniteNumber(tick.ltp, tick.last_price, tick.price, tick.value);
+  if (ltp === null) return null;
+
+  return {
+    key,
+    label: INDEX_LABELS[key] || key,
+    symbol: tick.symbol || payload.sourceSymbol || key,
+    ltp,
+    change: firstFiniteNumber(tick.change, tick.ch, tick.day_change),
+    change_pct: firstFiniteNumber(tick.change_pct, tick.chp, tick.day_change_pct),
+    updated_at: tick.updated_at || payload.updated_at || formatTime(),
+    liveFeed: 'stream',
+  };
+};
 
 // Helper to format 24h clock time
 const formatTime = (date = new Date()) => {
@@ -333,6 +384,7 @@ export const MarketProvider = ({ children }) => {
         putOi,
         pcr: currentPcr,
         pcrTrend: trend,
+        optSignal,
         optionSignal: optSignal,
         vwapSignal: vwapSig,
       };
@@ -445,11 +497,75 @@ export const MarketProvider = ({ children }) => {
     }
   };
 
+  const applyLiveIndexTick = (tickData) => {
+    const tick = normalizeTickPayload(tickData);
+    if (!tick) return false;
+
+    setMarketStrip((prev) => {
+      const current = Array.isArray(prev) ? prev : [];
+      let found = false;
+      const next = current.map((item) => {
+        const itemKey = normalizeIndexKey(item.symbol) || normalizeIndexKey(item.label) || normalizeIndexKey(item.short_name);
+        if (itemKey !== tick.key) return item;
+        found = true;
+        return {
+          ...item,
+          label: item.label || tick.label,
+          short_name: item.short_name || tick.label,
+          ltp: tick.ltp,
+          change: tick.change ?? item.change,
+          change_pct: tick.change_pct ?? item.change_pct,
+          change_p: tick.change_pct ?? item.change_p,
+          updated_at: tick.updated_at,
+          liveFeed: tick.liveFeed,
+        };
+      });
+
+      if (!found) {
+        next.push({
+          label: tick.label,
+          short_name: tick.label,
+          symbol: tick.symbol,
+          ltp: tick.ltp,
+          change: tick.change ?? 0,
+          change_pct: tick.change_pct ?? 0,
+          change_p: tick.change_pct ?? 0,
+          updated_at: tick.updated_at,
+          liveFeed: tick.liveFeed,
+        });
+      }
+
+      return next;
+    });
+
+    if (tick.key === selectedIndexRef.current) {
+      setMarketData((prev) => {
+        if (!prev) return prev;
+        const updated = {
+          ...prev,
+          spot: tick.ltp,
+          change: tick.change ?? prev.change,
+          pChange: tick.change_pct ?? prev.pChange,
+          pct_change: tick.change_pct ?? prev.pct_change,
+          liveFeed: tick.liveFeed,
+          updated_at: tick.updated_at,
+        };
+        setMarketDataCache((cache) => ({ ...cache, [tick.key]: updated }));
+        return updated;
+      });
+    }
+
+    setIsConnected(true);
+    setError('');
+    setLastUpdated(formatTime());
+    return true;
+  };
+
   // Initial load and polling
   // Real-time WebSocket ticks
   useEffect(() => {
     const socket = io(getApiBaseUrl(), {
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
@@ -465,13 +581,14 @@ export const MarketProvider = ({ children }) => {
 
     socket.on('connect', () => {
       // Re-subscribe to everything when connecting or reconnecting
-      socket.emit('subscribe', { symbols: [selectedIndex] });
-      socket.emit('subscribe_strip', { symbols: ['NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY'].filter(s => s !== selectedIndex) });
+      socket.emit('subscribe', { symbols: [selectedIndexRef.current] });
+      socket.emit('subscribe_strip', { symbols: LIVE_INDEXES.filter(s => s !== selectedIndexRef.current) });
     });
 
     socket.on('tick', (data) => {
       if (data && data.symbol) {
         tickBuffer[data.symbol] = data;
+        applyLiveIndexTick(data);
         
         // If it's an option symbol (contains CE or PE), buffer it for the chain
         if (data.symbol.includes('CE') || data.symbol.includes('PE')) {
@@ -595,6 +712,52 @@ export const MarketProvider = ({ children }) => {
       socket.disconnect();
     };
   }, [selectedIndex]);
+
+  useEffect(() => {
+    let stream;
+    let isClosed = false;
+
+    try {
+      const url = `${getApiBaseUrl()}/api/fyers/market-stream?symbols=${LIVE_INDEXES.join(',')}`;
+      stream = new EventSource(url, {
+        headers: {
+          'Bypass-Tunnel-Reminder': 'true',
+          'localtunnel-bypass': 'true',
+        },
+        pollingInterval: 0,
+      });
+
+      stream.addEventListener('open', () => {
+        if (!isClosed) setIsConnected(true);
+      });
+
+      stream.addEventListener('message', (event) => {
+        if (isClosed || !event?.data) return;
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.type === 'tick') {
+            applyLiveIndexTick(payload);
+          }
+        } catch {
+          // Ignore malformed heartbeat chunks.
+        }
+      });
+
+      stream.addEventListener('error', () => {
+        if (!isClosed) setIsConnected(false);
+      });
+    } catch {
+      setIsConnected(false);
+    }
+
+    return () => {
+      isClosed = true;
+      if (stream) {
+        stream.removeAllEventListeners?.();
+        stream.close?.();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
