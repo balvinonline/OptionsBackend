@@ -90,6 +90,26 @@ const normalizeTickPayload = (payload) => {
   };
 };
 
+const buildTickOnlyMarketData = (tick) => ({
+  symbol: tick.key,
+  label: tick.label,
+  spot: tick.ltp,
+  change: tick.change ?? 0,
+  pChange: tick.change_pct ?? 0,
+  pct_change: tick.change_pct ?? 0,
+  pcr_oi: 0,
+  call_oi_total: 0,
+  put_oi_total: 0,
+  chain: [],
+  optionChain: [],
+  support: [],
+  resistance: [],
+  analytics: {},
+  liveFeed: tick.liveFeed,
+  updated_at: tick.updated_at,
+  isTickOnly: true,
+});
+
 const getFriendlyMarketError = (error) => {
   const raw = String(error?.message || '').toLowerCase();
   if (raw.includes('network') || raw.includes('timeout')) {
@@ -617,8 +637,10 @@ export const MarketProvider = ({ children }) => {
         }
       } catch (err2) {
         if (requestedIndex !== selectedIndexRef.current) return;
-        setIsConnected(false);
-        setError(getFriendlyMarketError(err2));
+        const cachedLiveData = marketDataCache[requestedIndex] || marketData;
+        const hasLiveSpot = Number(cachedLiveData?.spot || 0) > 0;
+        setIsConnected(hasLiveSpot);
+        setError(hasLiveSpot ? '' : getFriendlyMarketError(err2));
       }
     } finally {
       if (requestedIndex === selectedIndexRef.current) {
@@ -706,13 +728,13 @@ export const MarketProvider = ({ children }) => {
 
     if (tick.key === selectedIndexRef.current) {
       setMarketData((prev) => {
-        if (!prev) return prev;
+        const base = prev || marketDataCache[tick.key] || buildTickOnlyMarketData(tick);
         const updated = {
-          ...prev,
+          ...base,
           spot: tick.ltp,
-          change: tick.change ?? prev.change,
-          pChange: tick.change_pct ?? prev.pChange,
-          pct_change: tick.change_pct ?? prev.pct_change,
+          change: tick.change ?? base.change,
+          pChange: tick.change_pct ?? base.pChange,
+          pct_change: tick.change_pct ?? base.pct_change,
           liveFeed: tick.liveFeed,
           updated_at: tick.updated_at,
         };
