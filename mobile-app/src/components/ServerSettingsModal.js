@@ -10,6 +10,7 @@ import {
   Alert,
   Switch,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
@@ -36,6 +37,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const [isTotpLoading, setIsTotpLoading] = useState(false);
   const [showWebView, setShowWebView] = useState(false);
   const [loginUrl, setLoginUrl] = useState('');
+  const [authInput, setAuthInput] = useState('');
   const isProcessingRef = useRef(false);
 
   React.useEffect(() => {
@@ -86,7 +88,16 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
       const data = await resp.json();
       if (data.loginUrl) {
         setLoginUrl(data.loginUrl);
-        setShowWebView(true);
+        const canOpen = await Linking.canOpenURL(data.loginUrl);
+        if (canOpen) {
+          await Linking.openURL(data.loginUrl);
+          Alert.alert(
+            'Fyers Login Opened',
+            'Complete login in browser. After redirect, copy the final URL or auth_code and paste it here.'
+          );
+        } else {
+          setShowWebView(true);
+        }
       } else {
         Alert.alert('Error', data.error || 'Could not generate Login URL. Check backend keys.');
       }
@@ -111,6 +122,10 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   };
 
   const handleSubmitAuthCode = async (finalUrl) => {
+    if (!String(finalUrl || '').trim()) {
+      Alert.alert('Missing Code', 'Paste the Fyers final URL or auth_code first.');
+      return;
+    }
     setIsTotpLoading(true);
     try {
       const targetUrl = normalizeServerUrl(inputUrl || serverUrl);
@@ -259,6 +274,24 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
                     <Text style={styles.totpBtnText}>Secure In-App Fyers Login</Text>
                   </>
                 )}
+              </TouchableOpacity>
+
+              <TextInput
+                style={styles.authInput}
+                placeholder="Paste Fyers final URL or auth_code"
+                placeholderTextColor={theme.colors.textDisabled}
+                value={authInput}
+                onChangeText={setAuthInput}
+                autoCapitalize="none"
+                multiline
+              />
+              <TouchableOpacity
+                style={styles.authSaveBtn}
+                onPress={() => handleSubmitAuthCode(authInput)}
+                disabled={isTotpLoading}
+              >
+                <Ionicons name="key" size={16} color={theme.colors.primary} />
+                <Text style={styles.authSaveText}>Save Pasted Token</Text>
               </TouchableOpacity>
 
               {/* Alert Preferences */}
@@ -490,6 +523,35 @@ const getStyles = (theme) => StyleSheet.create({
     color: '#071a26',
     fontSize: 13,
     fontWeight: '900',
+  },
+  authInput: {
+    backgroundColor: '#071a26',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 10,
+    color: theme.colors.textPrimary,
+    fontSize: 12,
+    minHeight: 68,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    textAlignVertical: 'top',
+    marginBottom: 8,
+  },
+  authSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#071a26',
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    paddingVertical: 9,
+    borderRadius: 9,
+  },
+  authSaveText: {
+    color: theme.colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '800',
   },
   divider: {
     height: 1,

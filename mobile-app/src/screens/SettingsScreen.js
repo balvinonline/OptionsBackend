@@ -40,6 +40,7 @@ export const SettingsScreen = () => {
   // WebView Login State
   const [showWebView, setShowWebView] = useState(false);
   const [loginUrl, setLoginUrl] = useState('');
+  const [authInput, setAuthInput] = useState('');
 
   const startWebViewLogin = async () => {
     try {
@@ -50,7 +51,16 @@ export const SettingsScreen = () => {
       const data = await resp.json();
       if (data.loginUrl) {
         setLoginUrl(data.loginUrl);
-        setShowWebView(true);
+        const canOpen = await Linking.canOpenURL(data.loginUrl);
+        if (canOpen) {
+          await Linking.openURL(data.loginUrl);
+          Alert.alert(
+            'Fyers Login Opened',
+            'Complete login in browser. After redirect, copy the final URL or auth_code and paste it here.'
+          );
+        } else {
+          setShowWebView(true);
+        }
       } else {
         Alert.alert('Error', data.error || 'Could not generate Login URL. Check backend keys.');
       }
@@ -77,6 +87,10 @@ export const SettingsScreen = () => {
   };
 
   const handleSubmitAuthCode = async (finalUrl) => {
+    if (!String(finalUrl || '').trim()) {
+      Alert.alert('Missing Code', 'Paste the Fyers final URL or auth_code first.');
+      return;
+    }
     setTotpLoading(true);
     try {
       const targetUrl = normalizeServerUrl(serverUrl);
@@ -249,6 +263,28 @@ export const SettingsScreen = () => {
                   <Text style={styles.actionButtonText}>Secure In-App Fyers Login</Text>
                 </>
               )}
+            </TouchableOpacity>
+
+            <View style={[styles.inputWrapper, { marginTop: 10, alignItems: 'flex-start' }]}>
+              <Ionicons name="link-outline" size={18} color={theme.colors.textMuted} style={[styles.inputIcon, { marginTop: 13 }]} />
+              <TextInput
+                style={[styles.input, { minHeight: 72, textAlignVertical: 'top', paddingTop: 10 }]}
+                placeholder="Paste Fyers final URL or auth_code"
+                placeholderTextColor={theme.colors.textDisabled}
+                value={authInput}
+                onChangeText={setAuthInput}
+                autoCapitalize="none"
+                multiline
+              />
+            </View>
+
+            <TouchableOpacity
+              style={[styles.actionButton, { marginTop: 8, backgroundColor: theme.colors.bgCardSolid, borderWidth: 1, borderColor: theme.colors.primary }]}
+              onPress={() => handleSubmitAuthCode(authInput)}
+              disabled={totpLoading}
+            >
+              <Ionicons name="key" size={18} color={theme.colors.primary} />
+              <Text style={[styles.actionButtonText, { color: theme.colors.textPrimary }]}>Save Pasted Token</Text>
             </TouchableOpacity>
 
             <View style={styles.divider} />
