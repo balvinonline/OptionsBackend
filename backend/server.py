@@ -136,7 +136,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "option-dashboard-fo-breadth-20260531-1200"
+SERVER_BUILD_MARKER = "backend-token-fast-20260817"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
@@ -257,6 +257,18 @@ def normalize_fyers_access_token(client_id, access_token):
     if client_id and token.startswith(prefix):
         return token.split(":", 1)[1].strip()
     return token
+
+
+def mark_fyers_token_ready(client_id, access_token):
+    global FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME, fyers
+    os.environ["FYERS_ACCESS_TOKEN"] = access_token
+    FYERS_CLIENT_ID = client_id
+    FYERS_ACCESS_TOKEN = access_token
+    fyers = None
+    try:
+        FYERS_ENV_MTIME = ENV_PATH.stat().st_mtime if ENV_PATH.exists() else FYERS_ENV_MTIME
+    except Exception:
+        pass
 
 
 def save_env_value(env_path, key, value):
@@ -606,10 +618,6 @@ def refresh_fyers_from_env(force=False):
 
     FYERS_ENV_MTIME = env_mtime
     return fyers
-
-
-refresh_fyers_from_env(force=True)
-
 
 def clear_live_market_caches():
     _QUOTE_CACHE.clear()
@@ -6913,10 +6921,12 @@ def build_home_dashboard():
 # =========================================================
 @app.route("/api/health")
 def health():
-    refresh_fyers_from_env()
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
     return jsonify({
         "ok": True,
         "fyers": bool(fyers),
+        "accessTokenPresent": bool(os.getenv("FYERS_ACCESS_TOKEN", "").strip()),
+        "build": SERVER_BUILD_MARKER,
         "time": datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     })
 
@@ -7018,7 +7028,7 @@ def dashboard_history():
 
 @app.route("/api/fyers/token-status")
 def fyers_token_status():
-    refresh_fyers_from_env()
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
     return jsonify({
         "ok": True,
         "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
@@ -7028,7 +7038,7 @@ def fyers_token_status():
 
 @app.route("/api/fyers/login-url")
 def fyers_login_url():
-    refresh_fyers_from_env()
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
     client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
     secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
     redirect_uri = get_fyers_redirect_uri()
@@ -7060,7 +7070,7 @@ def fyers_login_url():
 @app.route("/api/fyers/save-token", methods=["POST"])
 def fyers_save_token():
     global _QUOTE_COOLDOWN_UNTIL, FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME
-    refresh_fyers_from_env()
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
     payload = request.get_json(silent=True) or {}
     direct_token = (payload.get("accessToken") or payload.get("token") or "").strip()
     client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
@@ -7070,13 +7080,7 @@ def fyers_save_token():
     if direct_token:
         access_token = normalize_fyers_access_token(client_id, direct_token)
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
-        os.environ["FYERS_ACCESS_TOKEN"] = access_token
-        FYERS_CLIENT_ID = client_id
-        FYERS_ACCESS_TOKEN = access_token
-        try:
-            FYERS_ENV_MTIME = ENV_PATH.stat().st_mtime if ENV_PATH.exists() else FYERS_ENV_MTIME
-        except Exception:
-            pass
+        mark_fyers_token_ready(client_id, access_token)
         _QUOTE_COOLDOWN_UNTIL = 0.0
         clear_live_market_caches()
         return jsonify({
@@ -7120,8 +7124,8 @@ def fyers_save_token():
             }), 200
 
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
+        mark_fyers_token_ready(client_id, access_token)
         _QUOTE_COOLDOWN_UNTIL = 0.0
-        refresh_fyers_from_env(force=True)
         clear_live_market_caches()
         return jsonify({
             "ok": True,

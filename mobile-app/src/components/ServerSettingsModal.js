@@ -24,6 +24,16 @@ import { APP_BUILD_LABEL } from '../services/buildInfo';
 
 const FYERS_LOGIN_URL_CACHE_KEY = 'FYERS_LOGIN_URL_CACHE';
 
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 12000) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 const buildFyersTokenPayload = (input = '') => {
   const value = String(input || '').trim();
   const tokenMatch = value.match(/[?&]access_token=([^&\s]+)/i);
@@ -117,7 +127,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
         setIsTotpLoading(false);
         return;
       }
-      const resp = await fetch(`${targetUrl}/api/fyers/login-url`, {
+      const resp = await fetchWithTimeout(`${targetUrl}/api/fyers/login-url`, {
         headers: {
           'Bypass-Tunnel-Reminder': 'true',
           'localtunnel-bypass': 'true'
@@ -141,7 +151,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
         Alert.alert('Error', data.error || 'Could not generate Login URL. Check backend keys.');
       }
     } catch(e) {
-      Alert.alert('Network Error', 'Cannot reach backend server to generate login URL.');
+      Alert.alert('Backend Slow', 'Server did not answer quickly. Tap Test Ping first, then try again.');
     } finally {
       setIsTotpLoading(false);
     }
@@ -194,7 +204,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
     setIsTotpLoading(true);
     try {
       const targetUrl = normalizeServerUrl(inputUrl || serverUrl);
-      const resp = await fetch(`${targetUrl}/api/fyers/save-token`, {
+      const resp = await fetchWithTimeout(`${targetUrl}/api/fyers/save-token`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -216,7 +226,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
         Alert.alert('❌ Error', data.error || 'Failed to verify token');
       }
     } catch (e) {
-      Alert.alert('Network Error', 'Could not connect to server.');
+      Alert.alert('Backend Slow', 'Token was not saved because the server did not answer quickly. Tap Test Ping first, then save again.');
     } finally {
       setIsTotpLoading(false);
     }
