@@ -20,6 +20,7 @@ import { getStoredSettings, setStoredSetting, CLOUD_SERVER_URL, normalizeServerU
 import { soundManager } from './AudioAlertHelper';
 import { useTheme } from '../context/ThemeContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { APP_BUILD_LABEL } from '../services/buildInfo';
 
 const FYERS_LOGIN_URL_CACHE_KEY = 'FYERS_LOGIN_URL_CACHE';
 
@@ -322,6 +323,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
                   </Text>
                 </View>
               </View>
+              <Text style={styles.buildInfoText}>Build {APP_BUILD_LABEL}</Text>
 
               <Text style={styles.inputHelp}>
                 {tokenIsActive
@@ -493,6 +495,12 @@ const getStyles = (theme) => StyleSheet.create({
     color: theme.colors.textSecondary,
     fontSize: 11,
     marginBottom: 8,
+  },
+  buildInfoText: {
+    color: theme.colors.primary,
+    fontSize: 10,
+    fontWeight: '800',
+    marginBottom: 6,
   },
   tokenBadge: {
     paddingHorizontal: 8,

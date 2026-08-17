@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SUPPORTED_INDEXES, useMarket } from '../context/MarketContext';
 import { MarketTape } from './MarketTape';
 import { useTheme } from '../context/ThemeContext';
+import { APP_BUILD_LABEL } from '../services/buildInfo';
 
 export const IndexHeader = ({ onOpenSettings }) => {
   const { theme } = useTheme();
@@ -17,6 +18,7 @@ export const IndexHeader = ({ onOpenSettings }) => {
         <View style={styles.branding}>
           <Ionicons name="stats-chart" size={18} color={theme.colors.primary} />
           <Text style={styles.brandTitle}>OPTIONS DESK</Text>
+          <Text style={styles.buildText}>{APP_BUILD_LABEL}</Text>
         </View>
 
         <View style={styles.statusGroup}>
@@ -96,6 +98,11 @@ const getStyles = (theme) => StyleSheet.create({
     fontWeight: '900',
     fontSize: 15,
     letterSpacing: 0.8,
+  },
+  buildText: {
+    color: theme.colors.primary,
+    fontSize: 8,
+    fontWeight: '800',
   },
   statusGroup: {
     flexDirection: 'row',
