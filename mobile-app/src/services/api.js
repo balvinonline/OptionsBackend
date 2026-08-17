@@ -46,8 +46,8 @@ export const api = {
 
   // Health / Connection Test
   checkHealth: async (customUrl) => {
-    const url = normalizeServerUrl(customUrl || currentServerUrl) + '/api/health';
-    const res = await axios.get(url, { timeout: 4000 });
+    const url = normalizeServerUrl(customUrl || currentServerUrl) + `/api/health?t=${Date.now()}`;
+    const res = await axios.get(url, { timeout: 75000 });
     return res.data;
   },
 
