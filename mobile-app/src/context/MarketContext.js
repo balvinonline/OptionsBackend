@@ -90,6 +90,17 @@ const normalizeTickPayload = (payload) => {
   };
 };
 
+const getFriendlyMarketError = (error) => {
+  const raw = String(error?.message || '').toLowerCase();
+  if (raw.includes('network') || raw.includes('timeout')) {
+    return 'Server waking or internet slow. Live detail will retry.';
+  }
+  if (raw.includes('500')) {
+    return 'Live detail not ready. Market tape can still update.';
+  }
+  return 'Live detail is reconnecting.';
+};
+
 // Helper to format 24h clock time
 const formatTime = (date = new Date()) => {
   return date.toLocaleTimeString('en-IN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -607,7 +618,7 @@ export const MarketProvider = ({ children }) => {
       } catch (err2) {
         if (requestedIndex !== selectedIndexRef.current) return;
         setIsConnected(false);
-        setError(err2.message || 'Connecting to backend...');
+        setError(getFriendlyMarketError(err2));
       }
     } finally {
       if (requestedIndex === selectedIndexRef.current) {

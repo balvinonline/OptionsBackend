@@ -31,6 +31,13 @@ const buildFyersTokenPayload = (input = '') => {
   return { accessToken: value };
 };
 
+const hasActiveFyersToken = (status) => Boolean(
+  status?.isValid ||
+  status?.accessTokenPresent ||
+  status?.fyersInitialized ||
+  status?.connected
+);
+
 export const ServerSettingsModal = ({ visible, onClose }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
@@ -49,6 +56,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
   const [loginUrl, setLoginUrl] = useState('');
   const [authInput, setAuthInput] = useState('');
   const isProcessingRef = useRef(false);
+  const tokenIsActive = hasActiveFyersToken(totpStatus);
 
   React.useEffect(() => {
     if (visible) {
@@ -83,7 +91,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
     }
   };
 
-  const startWebViewLogin = async () => {
+  const openFyersLogin = async () => {
     try {
       setIsTotpLoading(true);
       isProcessingRef.current = false;
@@ -130,6 +138,21 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
     }
   };
 
+  const startWebViewLogin = async () => {
+    if (tokenIsActive) {
+      Alert.alert(
+        'Token already active',
+        'Live token is already saved. No need to generate again now.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Refresh Anyway', onPress: openFyersLogin },
+        ]
+      );
+      return;
+    }
+    openFyersLogin();
+  };
+
   const onWebViewNavigation = async (navState) => {
     const { url } = navState;
     if (url.includes('auth_code=') || url.includes('code=')) {
@@ -143,9 +166,20 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
     }
   };
 
-  const handleSubmitAuthCode = async (finalUrl) => {
+  const handleSubmitAuthCode = async (finalUrl, forceSave = false) => {
     if (!String(finalUrl || '').trim()) {
       Alert.alert('Missing Code', 'Paste the Fyers final URL or auth_code first.');
+      return;
+    }
+    if (tokenIsActive && !forceSave) {
+      Alert.alert(
+        'Token already active',
+        'Live token is already saved. Skip this unless you want to replace it.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Save Anyway', onPress: () => handleSubmitAuthCode(finalUrl, true) },
+        ]
+      );
       return;
     }
     setIsTotpLoading(true);
@@ -163,6 +197,7 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
       const data = await resp.json();
       if (data.ok) {
         Alert.alert('✅ Success', 'Token Generated & Saved Successfully! Live Data is active.');
+        setAuthInput('');
         if (data.access_token) {
           await AsyncStorage.setItem('FYERS_CACHED_TOKEN', data.access_token);
         }
@@ -272,15 +307,17 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
               <View style={styles.divider} />
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.inputLabel}>FYERS SECURE BROKER LOGIN</Text>
-                <View style={[styles.tokenBadge, totpStatus?.accessTokenPresent ? styles.tokenActive : styles.tokenExpired]}>
+                <View style={[styles.tokenBadge, tokenIsActive ? styles.tokenActive : styles.tokenExpired]}>
                   <Text style={styles.tokenBadgeText}>
-                    {totpStatus?.accessTokenPresent ? '● TOKEN ACTIVE' : '○ TOKEN EXPIRED'}
+                    {tokenIsActive ? '● TOKEN ACTIVE' : '○ TOKEN EXPIRED'}
                   </Text>
                 </View>
               </View>
 
               <Text style={styles.inputHelp}>
-                Tap the button below to securely login to your Fyers account. The app will automatically intercept the token and connect you to the live market!
+                {tokenIsActive
+                  ? 'Token is active. Use refresh only when the market feed stops or the broker token expires.'
+                  : 'Login to Fyers, then paste the final URL or token here.'}
               </Text>
 
               <TouchableOpacity
@@ -293,7 +330,9 @@ export const ServerSettingsModal = ({ visible, onClose }) => {
                 ) : (
                   <>
                     <Ionicons name="shield-checkmark" size={18} color="#071a26" />
-                    <Text style={styles.totpBtnText}>Secure In-App Fyers Login</Text>
+                    <Text style={styles.totpBtnText}>
+                      {tokenIsActive ? 'Token Active - Refresh Only If Needed' : 'Open Fyers Login'}
+                    </Text>
                   </>
                 )}
               </TouchableOpacity>

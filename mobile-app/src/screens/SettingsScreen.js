@@ -32,6 +32,13 @@ const buildFyersTokenPayload = (input = '') => {
   return { accessToken: value };
 };
 
+const hasActiveFyersToken = (status) => Boolean(
+  status?.isValid ||
+  status?.accessTokenPresent ||
+  status?.fyersInitialized ||
+  status?.connected
+);
+
 export const SettingsScreen = () => {
   const { currentUser, logout, serverUrl } = useAuth();
   const { theme } = useTheme();
@@ -51,8 +58,9 @@ export const SettingsScreen = () => {
   const [showWebView, setShowWebView] = useState(false);
   const [loginUrl, setLoginUrl] = useState('');
   const [authInput, setAuthInput] = useState('');
+  const tokenIsActive = hasActiveFyersToken(fyersStatus);
 
-  const startWebViewLogin = async () => {
+  const openFyersLogin = async () => {
     try {
       setTotpLoading(true);
       isProcessingRef.current = false;
@@ -93,6 +101,21 @@ export const SettingsScreen = () => {
     }
   };
 
+  const startWebViewLogin = async () => {
+    if (tokenIsActive) {
+      Alert.alert(
+        'Token already active',
+        'Live token is already saved. No need to generate again now.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Refresh Anyway', onPress: openFyersLogin },
+        ]
+      );
+      return;
+    }
+    openFyersLogin();
+  };
+
   const isProcessingRef = React.useRef(false);
 
   const onWebViewNavigation = async (navState) => {
@@ -108,9 +131,20 @@ export const SettingsScreen = () => {
     }
   };
 
-  const handleSubmitAuthCode = async (finalUrl) => {
+  const handleSubmitAuthCode = async (finalUrl, forceSave = false) => {
     if (!String(finalUrl || '').trim()) {
       Alert.alert('Missing Code', 'Paste the Fyers final URL or auth_code first.');
+      return;
+    }
+    if (tokenIsActive && !forceSave) {
+      Alert.alert(
+        'Token already active',
+        'Live token is already saved. Skip this unless you want to replace it.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Save Anyway', onPress: () => handleSubmitAuthCode(finalUrl, true) },
+        ]
+      );
       return;
     }
     setTotpLoading(true);
@@ -124,6 +158,7 @@ export const SettingsScreen = () => {
       const data = await resp.json();
       if (data.ok) {
         Alert.alert('✅ Success', 'Token Generated & Saved Successfully! Live Data is active.');
+        setAuthInput('');
         if (data.access_token) {
           await AsyncStorage.setItem('FYERS_CACHED_TOKEN', data.access_token);
         }
@@ -261,7 +296,7 @@ export const SettingsScreen = () => {
           <View style={styles.card}>
             <View style={styles.cardHeader}>
               <Text style={styles.cardTitle}>FYERS ACCOUNT SYNC</Text>
-              {fyersStatus?.isValid ? (
+              {tokenIsActive ? (
                 <View style={styles.badgeSuccess}><Text style={styles.badgeText}>● TOKEN ACTIVE</Text></View>
               ) : (
                 <View style={styles.badgeError}><Text style={styles.badgeText}>● EXPIRED</Text></View>
@@ -269,7 +304,9 @@ export const SettingsScreen = () => {
             </View>
             
             <Text style={styles.cardDescription}>
-              Tap the button below to securely login to your Fyers account. The app will automatically intercept the token and connect you to the live market!
+              {tokenIsActive
+                ? 'Token is active. Use refresh only when the market feed stops or the broker token expires.'
+                : 'Login to Fyers, then paste the final URL or token here.'}
             </Text>
 
             <TouchableOpacity 
@@ -282,7 +319,9 @@ export const SettingsScreen = () => {
               ) : (
                 <>
                   <Ionicons name="shield-checkmark" size={20} color="#fff" />
-                  <Text style={styles.actionButtonText}>Secure In-App Fyers Login</Text>
+                  <Text style={styles.actionButtonText}>
+                    {tokenIsActive ? 'Token Active - Refresh Only If Needed' : 'Open Fyers Login'}
+                  </Text>
                 </>
               )}
             </TouchableOpacity>
