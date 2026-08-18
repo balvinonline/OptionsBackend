@@ -7905,7 +7905,9 @@ def handle_subscribe(data):
             if not chain_syms:
                 # If we don't have them cached, try to fetch the chain quickly
                 try:
-                    oc_raw = get_option_chain_raw(base_sym)
+                    cfg = INDEX_MAP.get(base_sym, {})
+                    option_symbols = cfg.get("option_symbols", [base_sym])
+                    oc_raw = get_option_chain_raw(option_symbols, cfg.get("future"), strikecount=30)
                     if isinstance(oc_raw, dict) and "data" in oc_raw:
                         data_block = oc_raw["data"]
                         chain_syms = []
