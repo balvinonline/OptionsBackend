@@ -7907,26 +7907,35 @@ def handle_subscribe(data):
                 try:
                     cfg = INDEX_MAP.get(base_sym, {})
                     option_symbols = cfg.get("option_symbols", [base_sym])
-                    oc_raw = get_option_chain_raw(option_symbols, cfg.get("future"), strikecount=30)
-                    if isinstance(oc_raw, dict) and "data" in oc_raw:
-                        data_block = oc_raw["data"]
-                        chain_syms = []
-                        if isinstance(data_block, dict):
-                            opts = data_block.get("optionsChain", [])
-                            for row in opts:
-                                if "symbol" in row: chain_syms.append(row["symbol"])
-                                if "pe_symbol" in row: chain_syms.append(row["pe_symbol"])
-                                if "ce_symbol" in row: chain_syms.append(row["ce_symbol"])
-                                if "symbol_CE" in row: chain_syms.append(row["symbol_CE"])
-                                if "symbol_PE" in row: chain_syms.append(row["symbol_PE"])
-                        elif isinstance(data_block, list):
-                            for row in data_block:
-                                if "symbol" in row: chain_syms.append(row["symbol"])
+                    
+                    global _FYERS_WS_OPTION_LOCKS
+                    if '_FYERS_WS_OPTION_LOCKS' not in globals():
+                        _FYERS_WS_OPTION_LOCKS = {}
                         
-                        _FYERS_WS_OPTION_SYMBOLS[base_sym] = list(set(chain_syms))
-                        chain_syms = _FYERS_WS_OPTION_SYMBOLS[base_sym]
-                except Exception:
-                    pass
+                    if not _FYERS_WS_OPTION_LOCKS.get(base_sym):
+                        _FYERS_WS_OPTION_LOCKS[base_sym] = True
+                        def fetch_bg(syms, fut_sym, b_sym):
+                            try:
+                                oc_raw = get_option_chain_raw(syms, fut_sym, strikecount=30)
+                                if isinstance(oc_raw, dict) and "data" in oc_raw:
+                                    data_block = oc_raw["data"]
+                                    c_syms = []
+                                    if isinstance(data_block, dict):
+                                        opts = data_block.get("optionsChain", [])
+                                        for row in opts:
+                                            if "symbol_CE" in row: c_syms.append(row["symbol_CE"])
+                                            if "symbol_PE" in row: c_syms.append(row["symbol_PE"])
+                                    _FYERS_WS_OPTION_SYMBOLS[b_sym] = list(set(c_syms))
+                                    if _FYERS_WS_OPTION_SYMBOLS[b_sym]:
+                                        ensure_fyers_ws_stream(_FYERS_WS_OPTION_SYMBOLS[b_sym])
+                            except Exception as e:
+                                print(f"bg fetch error for {b_sym}: {e}")
+                            finally:
+                                _FYERS_WS_OPTION_LOCKS[b_sym] = False
+                        
+                        threading.Thread(target=fetch_bg, args=(option_symbols, cfg.get("future"), base_sym), daemon=True).start()
+                except Exception as e:
+                    print("handle_subscribe background fetch spawn error:", e)
             
             for cs in chain_syms:
                 if cs:
