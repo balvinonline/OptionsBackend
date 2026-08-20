@@ -3,7 +3,7 @@
     "name": "Options Trading Desk",
     "slug": "option-desk-mobile",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {

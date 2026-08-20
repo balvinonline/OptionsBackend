@@ -32,6 +32,7 @@ export const Sidebar = ({ isOpen, onClose, onNavigate, activeTab, onNavigateWebF
     { id: 'Chart', title: 'Live Chart', icon: 'stats-chart' },
     { id: 'StockOptions', title: 'Stock Options Desk', icon: 'briefcase' },
     { id: 'OptionBuyer', title: 'Option Buyer Hub', icon: 'rocket' },
+    { id: 'ExpiryScalper', title: 'Expiry Scalper', icon: 'flash' },
   ];
 
   return (

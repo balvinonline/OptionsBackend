@@ -1,13 +1,15 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useMarket } from '../context/MarketContext';
 import { IndexHeader } from '../components/IndexHeader';
+import { OrderExecutionModal } from '../components/OrderExecutionModal';
 
 export const OptionBuyerScreen = ({ onNavigate }) => {
   const { theme } = useTheme();
   const { marketData, liveGreeks, whaleAlerts, bearishDivergence, bullishDivergence } = useMarket();
   const styles = getStyles(theme);
+  const [selectedOption, setSelectedOption] = useState(null);
 
   const chain = marketData?.chain || [];
   const spot = marketData?.spot || 0;
@@ -103,22 +105,28 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
           
           return (
             <View key={row.strike} style={[styles.chainRow, isMaxPain && styles.maxPainRow, isAtm && styles.atmRow]}>
-              <View style={styles.chainColSignal}>
+              <TouchableOpacity 
+                style={styles.chainColSignal}
+                onPress={() => setSelectedOption({ symbol: row.ce_symbol || row.symbol_CE, ltp: row.ce_ltp, side: 'CE' })}
+              >
                 <Text style={[styles.chainCol, { color: theme.colors.bullish }]}>{row.ce_ltp?.toFixed(2) || '-'} {isCeHighVolume ? '⚡' : ''}</Text>
                 <Text style={styles.greekText}>Δ: {ceGreek.delta.toFixed(2)} | Θ: {ceGreek.theta.toFixed(2)} {ceGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
                 {ceSignal && <Text style={[styles.signalBadge, { backgroundColor: ceSignal.color }]}>{ceSignal.text}</Text>}
-              </View>
+              </TouchableOpacity>
               
               <View style={styles.chainColStrikeContainer}>
                 <Text style={[styles.chainColStrike, isAtm && styles.atmStrikeText]}>{row.strike}</Text>
                 {isAtm && <Text style={styles.atmBadge}>ATM</Text>}
               </View>
               
-              <View style={styles.chainColSignal}>
+              <TouchableOpacity 
+                style={styles.chainColSignal}
+                onPress={() => setSelectedOption({ symbol: row.pe_symbol || row.symbol_PE, ltp: row.pe_ltp, side: 'PE' })}
+              >
                 <Text style={[styles.chainCol, { color: theme.colors.bearish }]}>{row.pe_ltp?.toFixed(2) || '-'} {isPeHighVolume ? '⚡' : ''}</Text>
                 <Text style={styles.greekText}>Δ: {peGreek.delta.toFixed(2)} | Θ: {peGreek.theta.toFixed(2)} {peGreek.gamma >= 0.005 ? '🔥' : ''}</Text>
                 {peSignal && <Text style={[styles.signalBadge, { backgroundColor: peSignal.color }]}>{peSignal.text}</Text>}
-              </View>
+              </TouchableOpacity>
             </View>
           );
         })}
@@ -138,6 +146,11 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
         )}
       </View>
     </ScrollView>
+    <OrderExecutionModal 
+      visible={!!selectedOption} 
+      optionData={selectedOption} 
+      onClose={() => setSelectedOption(null)} 
+    />
   </View>
   );
 };

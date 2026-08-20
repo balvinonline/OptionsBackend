@@ -19,6 +19,7 @@ import { StockOptionsScreen } from './src/screens/StockOptionsScreen';
 import { StockDeskScreen } from './src/screens/StockDeskScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { OptionBuyerScreen } from './src/screens/OptionBuyerScreen';
+import { ExpiryScalperScreen } from './src/screens/ExpiryScalperScreen';
 import { Sidebar } from './src/components/Sidebar';
 
 function MainLayout() {
@@ -95,6 +96,10 @@ function MainLayout() {
 
         <View style={[styles.screenWrapper, activeTab === 'OptionBuyer' && !webFeatureParams && !deskSymbol && styles.screenVisible]}>
           {activeTab === 'OptionBuyer' && <OptionBuyerScreen onNavigate={setActiveTab} />}
+        </View>
+
+        <View style={[styles.screenWrapper, activeTab === 'ExpiryScalper' && !webFeatureParams && !deskSymbol && styles.screenVisible]}>
+          {activeTab === 'ExpiryScalper' && <ExpiryScalperScreen onNavigate={setActiveTab} />}
         </View>
 
         {deskSymbol && (

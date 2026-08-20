@@ -64,31 +64,44 @@ export const PcrAnalyticsScreen = ({ onNavigate }) => {
           <View style={styles.tableContainer}>
             {/* Table Header */}
             <View style={styles.tableHeader}>
-              <Text style={[styles.th, { flex: 1 }]}>TIME</Text>
-              <Text style={[styles.th, { flex: 1, textAlign: 'center' }]}>SPOT</Text>
+              <Text style={[styles.th, { flex: 1.2 }]}>TIME</Text>
+              <Text style={[styles.th, { flex: 1.5, textAlign: 'center' }]}>SPOT</Text>
               <Text style={[styles.th, { flex: 1, textAlign: 'center' }]}>PCR</Text>
-              <Text style={[styles.th, { flex: 1, textAlign: 'right' }]}>SIGNAL</Text>
+              <Text style={[styles.th, { flex: 1.2, textAlign: 'center' }]}>VWAP</Text>
+              <Text style={[styles.th, { flex: 1.5, textAlign: 'right' }]}>SIGNAL</Text>
             </View>
 
             {/* Table Rows */}
             {buckets.map((b, idx) => {
               const signal = getSignalMeta(b);
+              const timeStr = b.timeLabel || (b.bucketTs || b.ts ? new Date(b.bucketTs || b.ts).toLocaleTimeString("en-IN", { hour12: false, hour: '2-digit', minute: '2-digit' }) : '-');
+              const spotVal = b.spot || b.price || 0;
+              const pcrVal = b.pcr || b.value || 0;
+              const vwapSig = b.vwapSignal || b.vwapBias || '-';
+              let vwapShort = vwapSig;
+              if (vwapSig.includes('ABOVE')) vwapShort = 'ABOVE';
+              else if (vwapSig.includes('BELOW')) vwapShort = 'BELOW';
+              const vwapColor = vwapShort === 'ABOVE' ? theme.colors.success : vwapShort === 'BELOW' ? theme.colors.danger : theme.colors.textMuted;
+              
               return (
                 <View key={idx} style={styles.tableRow}>
-                  <View style={[styles.td, { flex: 1, flexDirection: 'row', alignItems: 'center' }]}>
-                    <Text style={styles.timeText}>{b.timeLabel}</Text>
+                  <View style={[styles.td, { flex: 1.2, flexDirection: 'row', alignItems: 'center' }]}>
+                    <Text style={styles.timeText}>{timeStr}</Text>
                   </View>
 
-                  <View style={[styles.td, { flex: 1, alignItems: 'center' }]}>
-                    <Text style={styles.spotText}>{Number(b.spot).toFixed(1)}</Text>
+                  <View style={[styles.td, { flex: 1.5, alignItems: 'center' }]}>
+                    <Text style={styles.spotText}>{Number(spotVal).toFixed(1)}</Text>
                   </View>
 
                   <View style={[styles.td, { flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 4 }]}>
-                    <Text style={[styles.pcrText, { color: getPcrColor(b.pcr) }]}>{Number(b.pcr || 0).toFixed(2)}</Text>
-                    {getTrendIcon(b.pcrTrend || b.trend)}
+                    <Text style={[styles.pcrText, { color: getPcrColor(pcrVal) }]}>{Number(pcrVal).toFixed(2)}</Text>
                   </View>
 
-                  <View style={[styles.td, { flex: 1, alignItems: 'flex-end' }]}>
+                  <View style={[styles.td, { flex: 1.2, alignItems: 'center' }]}>
+                    <Text style={{ color: vwapColor, fontSize: 11, fontWeight: '700' }}>{vwapShort}</Text>
+                  </View>
+
+                  <View style={[styles.td, { flex: 1.5, alignItems: 'flex-end', justifyContent: 'center' }]}>
                     <View style={[
                       styles.signalBadge,
                       signal.tone === 'bullish' ? styles.badgeBullish : signal.tone === 'bearish' ? styles.badgeBearish : styles.badgeNeutral

@@ -95,10 +95,15 @@ export const api = {
   },
 
   getFyersHistory: async (symbol, resolution = '5', fromDate, toDate) => {
-    const params = { symbol, resolution };
+    const params = { symbol, resolution, lookback: 2000 };
     if (fromDate) params.from = fromDate;
     if (toDate) params.to = toDate;
     const res = await apiClient.get('/api/fyers/history', { params });
+    return res.data;
+  },
+
+  placeOrder: async (orderData) => {
+    const res = await apiClient.post('/api/fyers/order', orderData);
     return res.data;
   },
 

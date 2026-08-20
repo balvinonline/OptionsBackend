@@ -3,15 +3,37 @@ import { StyleSheet, Text, View, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 
-export const AdvancedAnalyticsCard = ({ analytics }) => {
+export const AdvancedAnalyticsCard = ({ analytics, marketData }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
 
-  if (!analytics) return null;
+  if (!analytics && !marketData) return null;
 
-  const smartOIFlow = analytics.smartOIFlow || {};
-  const gamma = analytics.gammaExposure || {};
-  const regime = analytics.marketRegime || {};
+  const smartOIFlow = analytics?.smartOIFlow || {};
+  const gamma = analytics?.gammaExposure || {};
+  const regime = analytics?.marketRegime || {};
+  
+  // Calculate Support / Resistance from chain
+  let resistanceStrike = '-';
+  let supportStrike = '-';
+  let maxPain = analytics?.maxPain || marketData?.max_pain || '-';
+  
+  if (marketData?.chain && marketData.chain.length > 0) {
+    let maxCeOi = 0;
+    let maxPeOi = 0;
+    let resStrike = 0;
+    let supStrike = 0;
+    
+    marketData.chain.forEach(row => {
+      const ceOi = Number(row.ce_oi || row.oi_CE || 0);
+      const peOi = Number(row.pe_oi || row.oi_PE || 0);
+      if (ceOi > maxCeOi) { maxCeOi = ceOi; resStrike = row.strike; }
+      if (peOi > maxPeOi) { maxPeOi = peOi; supStrike = row.strike; }
+    });
+    
+    if (resStrike > 0) resistanceStrike = resStrike;
+    if (supStrike > 0) supportStrike = supStrike;
+  }
 
   const renderBadge = (label, colorStr) => {
     let color = theme.colors.textMuted;
@@ -33,6 +55,81 @@ export const AdvancedAnalyticsCard = ({ analytics }) => {
       <Text style={styles.sectionTitle}>ADVANCED ANALYTICS</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         
+        {/* Key Levels (Support / Resistance / Max Pain) */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="stats-chart" size={16} color={theme.colors.primary} />
+            <Text style={styles.cardTitle}>OI Walls & Key Levels</Text>
+          </View>
+          <View style={styles.cardBody}>
+            <View style={styles.row}>
+              <Text style={styles.label}>Resistance (Call OI)</Text>
+              <Text style={[styles.value, { color: theme.colors.bearish }]}>{resistanceStrike}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Support (Put OI)</Text>
+              <Text style={[styles.value, { color: theme.colors.bullish }]}>{supportStrike}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Max Pain</Text>
+              <Text style={[styles.value, { color: theme.colors.warning }]}>{maxPain}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Multi-Timeframe Trend */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="time" size={16} color={theme.colors.primary} />
+            <Text style={styles.cardTitle}>MTF Trend Matrix</Text>
+          </View>
+          <View style={styles.cardBody}>
+            <View style={styles.row}>
+              <Text style={styles.label}>5-Minute</Text>
+              {renderBadge(marketData?.trend || 'Neutral', marketData?.trend)}
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>15-Minute</Text>
+              {renderBadge(marketData?.technical_levels?.fifteenTrend || 'Neutral', marketData?.technical_levels?.fifteenTrend)}
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Daily (HTF)</Text>
+              {renderBadge(marketData?.technical_levels?.dailyTrend || 'Neutral', marketData?.technical_levels?.dailyTrend)}
+            </View>
+          </View>
+        </View>
+
+        {/* Previous Day & Gap Analysis */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Ionicons name="alert-circle" size={16} color={theme.colors.primary} />
+            <Text style={styles.cardTitle}>Gap & Prev Day Levels</Text>
+          </View>
+          <View style={styles.cardBody}>
+            <View style={styles.row}>
+              <Text style={styles.label}>Gap Status</Text>
+              {(() => {
+                const changePct = Number(marketData?.spot?.change_pct || 0);
+                if (changePct > 0.5) return renderBadge(`+${changePct}% Gap Up (Fade Risk)`, 'bearish');
+                if (changePct < -0.5) return renderBadge(`${changePct}% Gap Down (Bounce)`, 'bullish');
+                return renderBadge('Flat Open', 'neutral');
+              })()}
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Prev High</Text>
+              <Text style={[styles.value, { color: theme.colors.warning }]}>
+                {marketData?.analytics?.previousDayLevels?.high || '-'}
+              </Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Prev Low</Text>
+              <Text style={[styles.value, { color: theme.colors.warning }]}>
+                {marketData?.analytics?.previousDayLevels?.low || '-'}
+              </Text>
+            </View>
+          </View>
+        </View>
+
         {/* Smart OI Flow */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>

@@ -6,6 +6,7 @@ import { getApiBaseUrl } from '../services/api';
 import { OptionChainRow } from '../components/OptionChainRow';
 import { AdvancedAnalyticsCard } from '../components/AdvancedAnalyticsCard';
 import { CandlestickChart } from '../components/CandlestickChart';
+import { OiBarChart } from '../components/OiBarChart';
 
 export const StockDeskScreen = ({ symbol, onBack }) => {
   const { theme } = useTheme();
@@ -139,6 +140,10 @@ export const StockDeskScreen = ({ symbol, onBack }) => {
             )}
 
             <CandlestickChart symbol={`NSE:${symbol}-EQ`} height={260} />
+            
+            {detail?.optionChain && detail.optionChain.length > 0 && (
+              <OiBarChart chain={detail.optionChain} atm={atmStrike} />
+            )}
 
             <View style={[styles.chainHeader, { marginTop: 12 }]}>
               <Text style={styles.sectionTitle}>Buyer's Chain ({chainRows.length} Strikes)</Text>

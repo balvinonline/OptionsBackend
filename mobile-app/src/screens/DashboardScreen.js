@@ -22,7 +22,7 @@ import { useTheme } from '../context/ThemeContext';
 export const DashboardScreen = ({ onNavigate }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
-  const { selectedIndex, marketData, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
+  const { selectedIndex, marketData, sectorStocks, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
   const [showSettings, setShowSettings] = useState(false);
   const [showZonePopup, setShowZonePopup] = useState(false);
 
@@ -234,7 +234,7 @@ export const DashboardScreen = ({ onNavigate }) => {
         </View>
 
         {/* Advanced Analytics */}
-        <AdvancedAnalyticsCard analytics={marketData?.analytics} />
+        <AdvancedAnalyticsCard analytics={marketData?.analytics} marketData={marketData} />
 
         {/* Open Interest Chart (Fast Native View) */}
         <View style={styles.chartHeaderRow}>
@@ -705,5 +705,40 @@ const getStyles = (theme) => StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
     letterSpacing: 1,
+  },
+  moodCard: {
+    backgroundColor: theme.colors.bgCardSolid,
+    marginHorizontal: 12,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+  },
+  moodTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: theme.colors.textMuted,
+    marginBottom: 8,
+  },
+  moodBarContainer: {
+    height: 20,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  moodBar: {
+    flex: 1,
+    flexDirection: 'row',
+    position: 'relative',
+  },
+  moodSegment: {
+    height: '100%',
+  },
+  moodText: {
+    position: 'absolute',
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '800',
+    top: 3,
   },
 });

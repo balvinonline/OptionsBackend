@@ -160,6 +160,7 @@ export const MarketProvider = ({ children }) => {
   const prevSignalRef = useRef(null);
   const prevZoneRef = useRef({});
   const selectedIndexRef = useRef('NIFTY');
+  const globalPcrHistoryRef = useRef({});
   const [marketDataCache, setMarketDataCache] = useState({});
 
   // Compute ATM strike
@@ -554,7 +555,7 @@ export const MarketProvider = ({ children }) => {
     const putOi = normData.put_oi_total || 0;
 
     // Helper to update a bucket array
-    const addOrUpdateBucket = (prevBuckets, bucketLabel, interval) => {
+    const addOrUpdateBucket = (prevBuckets, bucketLabel, interval, symbol) => {
       const existingIdx = prevBuckets.findIndex((b) => b.timeLabel === bucketLabel);
       const prevPcr = prevBuckets.length > 0 ? prevBuckets[0].pcr : currentPcr;
       const trend = currentPcr > prevPcr ? 'UP' : currentPcr < prevPcr ? 'DOWN' : 'FLAT';
@@ -565,6 +566,7 @@ export const MarketProvider = ({ children }) => {
         timeLabel: bucketLabel,
         ts: Date.now(),
         interval,
+        symbol,
         spot,
         callOi,
         putOi,
@@ -575,16 +577,30 @@ export const MarketProvider = ({ children }) => {
         vwapSignal: vwapSig,
       };
 
+      let nextBuckets;
       if (existingIdx >= 0) {
         const next = [...prevBuckets];
         next[existingIdx] = { ...next[existingIdx], ...entry };
-        return next;
+        nextBuckets = next;
+      } else {
+        nextBuckets = [entry, ...prevBuckets.slice(0, 59)];
       }
-      return [entry, ...prevBuckets.slice(0, 30)];
+
+      if (symbol) {
+          if (!globalPcrHistoryRef.current[symbol]) globalPcrHistoryRef.current[symbol] = [];
+          const globalIdx = globalPcrHistoryRef.current[symbol].findIndex(b => b.timeLabel === bucketLabel && b.interval === interval);
+          if (globalIdx >= 0) {
+             globalPcrHistoryRef.current[symbol][globalIdx] = entry;
+          } else {
+             globalPcrHistoryRef.current[symbol] = [entry, ...globalPcrHistoryRef.current[symbol].slice(0, 119)];
+          }
+      }
+
+      return nextBuckets;
     };
 
-    setPcrBuckets5m((prev) => addOrUpdateBucket(prev, bucket5m, 5));
-    setPcrBuckets15m((prev) => addOrUpdateBucket(prev, bucket15m, 15));
+    setPcrBuckets5m((prev) => addOrUpdateBucket(prev, bucket5m, 5, normData.symbol));
+    setPcrBuckets15m((prev) => addOrUpdateBucket(prev, bucket15m, 15, normData.symbol));
   };
 
   const handleZoneAlert = (indexName, normData) => {
@@ -645,20 +661,21 @@ export const MarketProvider = ({ children }) => {
     } finally {
       if (requestedIndex === selectedIndexRef.current) {
         setIsLoading(false);
-        if (isManual) setIsRefreshing(false);
       }
+      if (isManual) setIsRefreshing(false);
     }
   };
 
   // Fetch market overview strip, news, sectors & heavyweights
   const fetchMarketAux = async () => {
     try {
-      const [strip, homeDash, news, sectors, scans] = await Promise.allSettled([
+      const [strip, homeDash, news, sectors, scans, dashHist] = await Promise.allSettled([
         api.getMarketStrip(),
         api.getHomeDashboard(),
         api.getMarketNews(),
         api.getSectorStocks(),
         api.getStockOptionsScan(),
+        api.getDashboardHistory(),
       ]);
 
       if (strip.status === 'fulfilled' && strip.value) {
@@ -679,6 +696,15 @@ export const MarketProvider = ({ children }) => {
       if (scans.status === 'fulfilled' && scans.value) {
         const scanRows = Array.isArray(scans.value) ? scans.value : (scans.value.rows || []);
         setHeavyweights(scanRows);
+      }
+      if (dashHist && dashHist.status === 'fulfilled' && dashHist.value?.pcrHistory) {
+          globalPcrHistoryRef.current = dashHist.value.pcrHistory;
+          const sym = selectedIndexRef.current;
+          const symHist = dashHist.value.pcrHistory[sym] || [];
+          if (symHist.length > 0) {
+              setPcrBuckets5m(symHist.filter(h => h.interval === 5 || h.interval === undefined));
+              setPcrBuckets15m(symHist.filter(h => h.interval === 15));
+          }
       }
     } catch {
       // silent
@@ -957,8 +983,8 @@ export const MarketProvider = ({ children }) => {
         const history = await api.getFyersHistory(requestedIndex, '5');
         if (!isMounted || requestedIndex !== selectedIndexRef.current) return;
         const candles = Array.isArray(history?.candles) ? history.candles : [];
-        setIndexCandles(candles.slice(-120));
-      } catch {
+        setIndexCandles(candles.slice(-400));
+      } catch (err) {
         if (isMounted) setIndexCandles([]);
       }
       if (isMounted) {
@@ -1023,6 +1049,14 @@ export const MarketProvider = ({ children }) => {
       setSelectedIndex(idx);
       
       const cached = marketDataCache[idx];
+      const symHist = globalPcrHistoryRef.current[idx] || [];
+      if (symHist.length > 0) {
+          setPcrBuckets5m(symHist.filter(h => h.interval === 5 || h.interval === undefined));
+          setPcrBuckets15m(symHist.filter(h => h.interval === 15));
+      } else {
+          setPcrBuckets5m([]);
+          setPcrBuckets15m([]);
+      }
       if (cached) {
         setMarketData(cached);
         setIsLoading(false);

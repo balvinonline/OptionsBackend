@@ -14,6 +14,7 @@ import { OptionChainRow } from '../components/OptionChainRow';
 import { OiBarChart } from '../components/OiBarChart';
 import { KpiCard } from '../components/KpiCard';
 import { ServerSettingsModal } from '../components/ServerSettingsModal';
+import { OrderExecutionModal } from '../components/OrderExecutionModal';
 import { useTheme } from '../context/ThemeContext';
 
 export const OptionChainScreen = () => {
@@ -22,6 +23,7 @@ export const OptionChainScreen = () => {
   const { marketData, atm, strikeCount, setStrikeCount, isRefreshing, refresh, isLoading } = useMarket();
   const [showSettings, setShowSettings] = useState(false);
   const [filterMode, setFilterMode] = useState('ALL'); // ALL, CALLS, PUTS
+  const [selectedOption, setSelectedOption] = useState(null);
 
   let rawChain = marketData?.chain || [];
   let chain = [...rawChain];
@@ -121,7 +123,7 @@ export const OptionChainScreen = () => {
             keyExtractor={(item) => String(item.strike)}
             renderItem={({ item }) => {
               const isATM = atm !== null && Number(item.strike) === Number(atm);
-              return <OptionChainRow row={item} isATM={isATM} maxOi={maxOi} />;
+              return <OptionChainRow row={item} isATM={isATM} maxOi={maxOi} onOptionPress={setSelectedOption} />;
             }}
             refreshing={isRefreshing}
             onRefresh={refresh}
@@ -179,6 +181,11 @@ export const OptionChainScreen = () => {
       )}
 
       <ServerSettingsModal visible={showSettings} onClose={() => setShowSettings(false)} />
+      <OrderExecutionModal 
+        visible={!!selectedOption} 
+        optionData={selectedOption} 
+        onClose={() => setSelectedOption(null)} 
+      />
     </View>
   );
 };

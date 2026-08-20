@@ -9,7 +9,7 @@ export const SignalCard = ({ signalAnalysis, indexSymbol }) => {
 
   if (!signalAnalysis) return null;
 
-  const { signalType, signalStrength, confidence, atmStrike } = signalAnalysis;
+  const { signalType, signalStrength, confidence, atmStrike, advancedSignals } = signalAnalysis;
   const isBuy = signalType === 'BUY_CE';
   const isSell = signalType === 'BUY_PE';
 
@@ -63,6 +63,21 @@ export const SignalCard = ({ signalAnalysis, indexSymbol }) => {
           <Text style={[styles.levelVal, { color: theme.colors.warning }]}>-20% / VWAP</Text>
         </View>
       </View>
+
+      {/* Advanced Signals (Squeeze, Blast, Writing) */}
+      {advancedSignals && advancedSignals.length > 0 && (
+        <View style={styles.advancedSignalsContainer}>
+          <Text style={styles.advancedSignalsTitle}>⚡ ADVANCED SIGNALS TRIGGERED</Text>
+          {advancedSignals.map((sig) => (
+            <View key={sig.id} style={styles.sigRow}>
+              <Text style={styles.sigIcon}>
+                {sig.type === 'SQUEEZE' ? '🔥' : sig.type === 'BLAST' ? '🚀' : sig.type === 'WRITING' ? '🛡️' : '📈'}
+              </Text>
+              <Text style={styles.sigMessage}>{sig.message}</Text>
+            </View>
+          ))}
+        </View>
+      )}
     </View>
   );
 };
@@ -170,4 +185,36 @@ const getStyles = (theme) => StyleSheet.create({
     fontWeight: '900',
     marginTop: 2,
   },
+  advancedSignalsContainer: {
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+  },
+  advancedSignalsTitle: {
+    color: theme.colors.warning,
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  sigRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  sigIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  sigMessage: {
+    color: theme.colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+  }
 });
