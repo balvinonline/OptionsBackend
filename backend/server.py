@@ -74,6 +74,7 @@ socketio = SocketIO(
     path="/api/socket.io",
     ping_timeout=10,
     ping_interval=5,
+    async_mode="threading",
     logger=False,
     engineio_logger=False
 )
