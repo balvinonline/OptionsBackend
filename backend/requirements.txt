@@ -10,3 +10,4 @@ eventlet
 gevent
 gevent-websocket
 pytz
+scipy
