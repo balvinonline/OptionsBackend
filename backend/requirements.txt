@@ -8,4 +8,4 @@ pyotp
 flask-socketio
 eventlet
 gevent
-gevent-websocket
+gevent-websocketpytz
