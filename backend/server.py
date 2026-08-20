@@ -7,7 +7,8 @@ import time
 import math
 import requests
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
+import pytz
 import json
 from email.utils import parsedate_to_datetime
 from html import unescape
@@ -37,6 +38,15 @@ def request_with_timeout(self, method, url, **kwargs):
     return original_request(self, method, url, **kwargs)
 requests.Session.request = request_with_timeout
 
+def is_market_open():
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    if now.weekday() >= 5: # Saturday = 5, Sunday = 6
+        return False
+    market_start = dt_time(9, 0)
+    market_end = dt_time(15, 35) # Keep alive slightly after 3:30 to catch closing prints
+    return market_start <= now.time() <= market_end
+
 from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -45,6 +55,7 @@ try:
     from fyers_apiv3 import fyersModel
 except Exception:
     fyersModel = None
+
 
 try:
     from fyers_apiv3.FyersWebsocket import data_ws
@@ -63,12 +74,19 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="gevent",
+    path="/api/socket.io",
     ping_timeout=10,
     ping_interval=5,
     logger=False,
     engineio_logger=False
 )
+
+def gc_worker():
+    while True:
+        time.sleep(300)
+        gc.collect()
+
+threading.Thread(target=gc_worker, daemon=True).start()
 
 @app.errorhandler(404)
 def not_found(e):
@@ -83,6 +101,11 @@ def index():
     if dist_folder.exists():
         return app.send_static_file('index.html')
     return "Frontend not built yet. Run 'npm run build' in root directory.", 404
+
+@app.route('/api/ping')
+def ping():
+    gc.collect()
+    return jsonify({"ok": True, "status": "awake", "time": time.time()})
 
 DB_PATH = Path(__file__).resolve().parent / "app.db"
 ACTIVE_TOKENS = {}
@@ -140,7 +163,14 @@ SERVER_BUILD_MARKER = "backend-token-fast-20260817"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
-FYERS_HISTORY_API_LOCK = threading.Lock()
+FYERS_HISTORY_API_LOCKS = {}
+FYERS_HISTORY_LOCK_MUTEX = threading.Lock()
+
+def get_fyers_history_lock(symbol):
+    with FYERS_HISTORY_LOCK_MUTEX:
+        if symbol not in FYERS_HISTORY_API_LOCKS:
+            FYERS_HISTORY_API_LOCKS[symbol] = threading.RLock()
+        return FYERS_HISTORY_API_LOCKS[symbol]
 
 # =========================================================
 # ENV
@@ -388,7 +418,7 @@ def fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=375):
     if cached is not None:
         return cached
 
-    with FYERS_HISTORY_API_LOCK:
+    with get_fyers_history_lock(symbol_key):
         cached = get_cached("fyers_history", key=key, ttl=8)
         if cached is not None:
             return cached
@@ -1156,6 +1186,10 @@ def background_future_oi_updater():
     global _QUOTE_COOLDOWN_UNTIL
     while True:
         try:
+            if not is_market_open():
+                time.sleep(60.0)
+                continue
+            
             if fyers and time.time() >= _QUOTE_COOLDOWN_UNTIL:
                 universe = get_fo_universe()
                 symbols = universe.get("symbols") or []
@@ -1763,7 +1797,15 @@ def on_fyers_ws_message(message):
             if symbol and is_meaningful_tick(tick):
                 try:
                     socketio.emit('tick', tick, room=symbol)
+                    if "CE" in symbol or "PE" in symbol:
+                        if "BANKNIFTY" in symbol: socketio.emit('tick', tick, room="BANKNIFTY")
+                        elif "FINNIFTY" in symbol: socketio.emit('tick', tick, room="FINNIFTY")
+                        elif "MIDCPNIFTY" in symbol: socketio.emit('tick', tick, room="MIDCPNIFTY")
+                        elif "NIFTY" in symbol: socketio.emit('tick', tick, room="NIFTY")
+                        elif "SENSEX" in symbol: socketio.emit('tick', tick, room="SENSEX")
+                        elif "BANKEX" in symbol: socketio.emit('tick', tick, room="BANKEX")
                 except Exception:
+
                     pass
             if symbol and is_meaningful_tick(tick):
                 cache_quote_block(symbol, {
@@ -2308,7 +2350,8 @@ def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12
 
     for sym in candidates:
         try:
-            payload = {"symbol": sym, "strikecount": int(strikecount or 12)}
+            # Force 60 strikes to Fyers API to bypass BSE ATM bugs, we will slice in python
+            payload = {"symbol": sym, "strikecount": 60}
             resp = fyers.optionchain(payload)
 
             if DEBUG_LOGS:
@@ -3319,6 +3362,19 @@ def get_option_chain_rows_for_index(symbol_key, spot_price, cache_ttl=8, strikec
     option_symbols = cfg.get("option_symbols") or [cfg["spot"], cfg["future"]]
     raw_oc = get_option_chain_raw(option_symbols, cfg["future"], strikecount=strikecount)
     chain = parse_option_chain(raw_oc, spot_price)
+    
+    # Filter to exact strikecount centered around spot
+    if spot_price and chain and strikecount:
+        try:
+            chain = sorted(chain, key=lambda x: safe_float(x.get("strike"), 0) or 0)
+            closest_idx = min(range(len(chain)), key=lambda i: abs((safe_float(chain[i].get("strike"), 0) or 0) - spot_price))
+            half = int(strikecount) // 2
+            start_idx = max(0, closest_idx - half)
+            end_idx = min(len(chain), closest_idx + half + (1 if int(strikecount) % 2 != 0 else 0))
+            chain = chain[start_idx:end_idx]
+        except Exception:
+            pass
+
     chain = enrich_chain_with_computed_iv(chain, spot_price, symbol_key)
     chain = enrich_chain_with_greeks(chain, spot_price, symbol_key)
 
@@ -7072,6 +7128,45 @@ def fyers_login_url():
     })
 
 
+@app.route("/api/fyers/order", methods=["POST"])
+def fyers_place_order():
+    if not fyers:
+        return jsonify({"ok": False, "error": "Fyers not initialized. Please log in."}), 401
+    
+    payload = request.get_json(silent=True) or {}
+    symbol = payload.get("symbol")
+    qty = payload.get("qty", 1)
+    side = payload.get("side", 1) # 1: Buy, -1: Sell
+    order_type = payload.get("type", 2) # 2: Market, 1: Limit
+    product = payload.get("productType", "MARGIN") # MARGIN or INTRADAY
+    limit_price = payload.get("limitPrice", 0)
+
+    if not symbol:
+        return jsonify({"ok": False, "error": "Missing symbol"}), 400
+
+    order_data = {
+        "symbol": symbol,
+        "qty": int(qty),
+        "type": int(order_type),
+        "side": int(side),
+        "productType": product,
+        "limitPrice": float(limit_price),
+        "stopPrice": 0,
+        "validity": "DAY",
+        "disclosedQty": 0,
+        "offlineOrder": False,
+    }
+
+    try:
+        response = fyers.place_order(data=order_data)
+        if response.get("s") == "ok" or response.get("code") == 200:
+            return jsonify({"ok": True, "message": "Order placed successfully", "data": response})
+        else:
+            return jsonify({"ok": False, "error": response.get("message", "Order failed"), "data": response}), 400
+    except Exception as e:
+        print("Order placement error:", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.route("/api/fyers/save-token", methods=["POST"])
 def fyers_save_token():
     global _QUOTE_COOLDOWN_UNTIL, FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME
@@ -7872,6 +7967,10 @@ def debug_index():
 })
 
 
+@socketio.on('connect')
+def test_connect():
+    print("UI CLIENT CONNECTED TO SOCKET.IO!", flush=True)
+
 @socketio.on('subscribe')
 def handle_subscribe(data):
     if not isinstance(data, dict):
@@ -8004,7 +8103,7 @@ def handle_unsubscribe(data):
 
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", debug=False, port=5000, use_reloader=False)
+    socketio.run(app, host="0.0.0.0", debug=False, port=5000, use_reloader=False, allow_unsafe_werkzeug=True)
 
 
 # --- OPTION BUYER HUB GREEKS THREAD ---
@@ -8012,6 +8111,10 @@ def greeks_updater_thread():
     while True:
         try:
             time.sleep(2.0)
+            if not is_market_open():
+                time.sleep(10.0) # sleep longer if market is closed
+                continue
+                
             if not _FYERS_WS_STATUS.get("connected"):
                 continue
                 
