@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { api, getApiBaseUrl } from '../services/api';
 import io from 'socket.io-client';
 import EventSource from 'react-native-sse';
@@ -934,13 +935,24 @@ export const MarketProvider = ({ children }) => {
       
     }, 100); // 100ms = 10 updates per second! Lightning fast!
 
-    return () => {
-      clearInterval(flushInterval);
-      socket.disconnect();
-    };
-  }, [selectedIndex]);
+      return () => {
+        clearInterval(flushInterval);
+        socket.disconnect();
+      };
+    }, [selectedIndex]);
 
-  useEffect(() => {
+    // Handle App coming from background to foreground
+    useEffect(() => {
+      const subscription = AppState.addEventListener('change', nextAppState => {
+        if (nextAppState === 'active') {
+          console.log('App came to foreground, reconnecting to server...');
+          fetchData(true);
+        }
+      });
+      return () => subscription.remove();
+    }, []);
+
+    useEffect(() => {
     let stream;
     let isClosed = false;
 
