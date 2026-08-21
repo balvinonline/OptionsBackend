@@ -22,7 +22,7 @@ import { useTheme } from '../context/ThemeContext';
 export const DashboardScreen = ({ onNavigate }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
-  const { selectedIndex, marketData, advanceDecline, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
+  const { selectedIndex, marketData, advanceDecline, sectorStocks, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
   const [showSettings, setShowSettings] = useState(false);
   const [showZonePopup, setShowZonePopup] = useState(false);
 
@@ -98,6 +98,49 @@ export const DashboardScreen = ({ onNavigate }) => {
             <Text style={styles.trendBannerText}>
               MARKET TREND: {signalAnalysis.gateStatus === 'BULLISH' ? 'BULLISH 🚀' : signalAnalysis.gateStatus === 'BEARISH' ? 'BEARISH 🩸' : 'SIDEWAYS ⚖️'}
             </Text>
+          </View>
+        )}
+
+        {/* Sector Performance diverging bar chart */}
+        {sectorStocks && sectorStocks.length > 0 && (
+          <View style={styles.sectorCard}>
+            <Text style={styles.sectorCardTitle}>Sector Performance</Text>
+            {sectorStocks
+              .filter(s => s.name && s.change_pct !== null)
+              .sort((a, b) => b.change_pct - a.change_pct)
+              .map((s, idx) => {
+                const isBull = s.change_pct >= 0;
+                const barWidth = Math.min(Math.abs(s.change_pct) * 20, 100); // Scale pct to width
+                
+                return (
+                  <View key={idx} style={styles.sectorRow}>
+                    <Text style={styles.sectorName} numberOfLines={1}>{s.name}</Text>
+                    
+                    <View style={styles.divergingTrack}>
+                      {/* Negative side */}
+                      <View style={styles.divergingSideLeft}>
+                        {!isBull && (
+                          <View style={[styles.divergingBar, { backgroundColor: theme.colors.bearish, width: `${barWidth}%` }]} />
+                        )}
+                      </View>
+                      
+                      {/* Center line */}
+                      <View style={styles.centerLine} />
+                      
+                      {/* Positive side */}
+                      <View style={styles.divergingSideRight}>
+                        {isBull && (
+                          <View style={[styles.divergingBar, { backgroundColor: theme.colors.bullish, width: `${barWidth}%` }]} />
+                        )}
+                      </View>
+                    </View>
+                    
+                    <Text style={[styles.sectorPct, { color: isBull ? theme.colors.bullish : theme.colors.bearish }]}>
+                      {s.change_pct > 0 ? '+' : ''}{s.change_pct?.toFixed(2)}%
+                    </Text>
+                  </View>
+                );
+              })}
           </View>
         )}
 
@@ -740,23 +783,89 @@ const getStyles = (theme) => StyleSheet.create({
     marginBottom: 8,
   },
   moodBarContainer: {
-    height: 20,
-    borderRadius: 10,
+    height: 12,
+    borderRadius: 6,
     overflow: 'hidden',
+    flexDirection: 'row',
   },
-  moodBar: {
+  moodBarBullish: {
+    backgroundColor: theme.colors.bullish,
+  },
+  moodBarBearish: {
+    backgroundColor: theme.colors.bearish,
+  },
+  moodLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
+  moodAdvances: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: theme.colors.bullish,
+  },
+  moodDeclines: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: theme.colors.bearish,
+  },
+  sectorCard: {
+    backgroundColor: theme.colors.bgCardSolid,
+    marginHorizontal: 12,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.borderLight,
+  },
+  sectorCardTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: theme.colors.textPrimary,
+    marginBottom: 12,
+  },
+  sectorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  sectorName: {
+    width: 80,
+    fontSize: 10,
+    fontWeight: '600',
+    color: theme.colors.textSecondary,
+    textAlign: 'right',
+    marginRight: 8,
+  },
+  divergingTrack: {
     flex: 1,
     flexDirection: 'row',
-    position: 'relative',
+    height: 12,
+    alignItems: 'center',
   },
-  moodSegment: {
-    height: '100%',
+  divergingSideLeft: {
+    flex: 1,
+    alignItems: 'flex-end',
   },
-  moodText: {
-    position: 'absolute',
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '800',
-    top: 3,
+  divergingSideRight: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  divergingBar: {
+    height: 8,
+    borderRadius: 2,
+  },
+  centerLine: {
+    width: 1,
+    height: 16,
+    backgroundColor: theme.colors.borderLight,
+    marginHorizontal: 2,
+  },
+  sectorPct: {
+    width: 50,
+    fontSize: 11,
+    fontWeight: 'bold',
+    textAlign: 'right',
+    marginLeft: 8,
   },
 });
