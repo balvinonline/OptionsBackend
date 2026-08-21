@@ -8,11 +8,10 @@ export const MoreMenuScreen = ({ onNavigate }) => {
   const styles = getStyles(theme);
 
   const menuItems = [
-    { title: 'Live Signals', icon: 'flash', action: () => onNavigate('Live Signals') },
-    { title: 'Trade Gate Rules', icon: 'shield-checkmark', action: () => onNavigate('Trade Gate Rules') },
-    { title: 'F&O Watchlist', icon: 'trending-up', action: () => onNavigate('F&O Watchlist') },
-    { title: 'Live Chart', icon: 'bar-chart', action: () => onNavigate('Live Chart') },
-    { title: 'Stock Options Desk', icon: 'briefcase', action: () => onNavigate('Stock Options Desk') },
+    { title: 'Live Signals', icon: 'flash', action: () => onNavigate('Signals') },
+    { title: 'Trade Gate Rules', icon: 'shield-checkmark', action: () => onNavigate('TradeGate') },
+    { title: 'Live Chart', icon: 'bar-chart', action: () => onNavigate('Chart') },
+    { title: 'Stock Options Desk', icon: 'briefcase', action: () => onNavigate('StockOptions') },
     { title: 'Settings & Login', icon: 'settings', action: () => onNavigate('Settings') },
   ];
 
