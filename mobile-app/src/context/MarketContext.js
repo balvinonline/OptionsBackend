@@ -199,8 +199,11 @@ export const MarketProvider = ({ children }) => {
       totalPeOiChg += Number(r.oich_PE || 0);
     });
 
-    const isBullishGate = pcr > 1.05 && totalPeOiChg > totalCeOiChg && spotChange >= 0;
-    const isBearishGate = pcr < 0.95 && totalCeOiChg > totalPeOiChg && spotChange <= 0;
+    const tradeZone = marketData.analytics?.tradeZones || {};
+    const backendTrap = tradeZone.zone === 'Trap Zone';
+
+    const isBullishGate = !backendTrap && pcr > 1.05 && totalPeOiChg > totalCeOiChg && spotChange >= 0;
+    const isBearishGate = !backendTrap && pcr < 0.95 && totalCeOiChg > totalPeOiChg && spotChange <= 0;
 
     const bearishDivergence = spotChange > 0 && totalCeOiChg > totalPeOiChg;
     const bullishDivergence = spotChange < 0 && totalPeOiChg > totalCeOiChg;
@@ -221,11 +224,12 @@ export const MarketProvider = ({ children }) => {
 
     const recStrike = atm ? (signalType === 'BUY_CE' ? atm : atm) : null;
     const spotVal = Number(marketData.spot || 0);
+    const trapWarning = backendTrap ? (tradeZone.reason || 'Trap Zone Active') : (pcr > 1.3 && spotChange < -30 ? 'CE Trap' : pcr < 0.7 && spotChange > 30 ? 'PE Trap' : null);
 
     return {
       signalType,
       signalStrength,
-      confidence,
+      confidence: backendTrap ? 0 : confidence,
       gateStatus: isBullishGate ? 'BULLISH' : isBearishGate ? 'BEARISH' : 'NEUTRAL',
       totalCeOiChg,
       totalPeOiChg,
@@ -238,7 +242,7 @@ export const MarketProvider = ({ children }) => {
       target2: signalType === 'BUY_CE' ? (spotVal * 0.007 * 1.6).toFixed(1) : (spotVal * 0.007 * 1.6).toFixed(1),
       stopLoss: signalType === 'BUY_CE' ? (spotVal * 0.007 * 0.8).toFixed(1) : (spotVal * 0.007 * 0.8).toFixed(1),
       absorptionDetected: marketData?.absorption_detected || false,
-      trapWarning: marketData?.trap_detected || (pcr > 1.3 && spotChange < -30 ? 'CE Trap' : pcr < 0.7 && spotChange > 30 ? 'PE Trap' : null),
+      trapWarning,
       bearishDivergence,
       bullishDivergence,
     };
@@ -261,6 +265,8 @@ export const MarketProvider = ({ children }) => {
     });
 
     const isBull = spotChange >= 0;
+    const tradeZone = marketData.analytics?.tradeZones || {};
+    const backendTrap = tradeZone.zone === 'Trap Zone';
 
     const items = [
       { id: 1, name: 'Daily Trend Direction', pass: isBull ? spotChange > 20 : spotChange < -20, detail: isBull ? 'Bullish Higher-High' : 'Bearish Lower-Low', category: 'Trend' },
@@ -278,7 +284,7 @@ export const MarketProvider = ({ children }) => {
       { id: 13, name: 'Expiry Time Decay Window', pass: true, detail: 'Sufficient theta cushion', category: 'Risk' },
       { id: 14, name: 'Option Premium Sweet Spot', pass: true, detail: 'Active ₹80 - ₹350 premium zone', category: 'Execution' },
       { id: 15, name: 'Volume Surge Confirmation', pass: true, detail: 'Above-average volume burst', category: 'Volume' },
-      { id: 16, name: 'Trap / Fakeout Safeguard', pass: !signalAnalysis?.trapWarning, detail: signalAnalysis?.trapWarning ? 'Warning: Trap Alert Active' : 'No Trap Detected', category: 'Risk' },
+      { id: 16, name: 'Trap / Fakeout Safeguard', pass: !backendTrap && !signalAnalysis?.trapWarning, detail: (backendTrap || signalAnalysis?.trapWarning) ? 'Warning: Trap Alert Active' : 'No Trap Detected', category: 'Risk' },
       { id: 17, name: 'OI Absorption Level', pass: true, detail: 'Institutional support defending levels', category: 'OI Analytics' },
       { id: 18, name: 'Risk : Reward Ratio', pass: true, detail: 'Target 1:2.2 R:R available', category: 'Risk' },
       { id: 19, name: 'Support / Resistance Wall', pass: true, detail: 'Clear runway before next major strike wall', category: 'Levels' },
@@ -287,7 +293,9 @@ export const MarketProvider = ({ children }) => {
 
     const passedCount = items.filter((i) => i.pass).length;
     let verdict = 'NEUTRAL / WAIT';
-    if (passedCount >= 16) {
+    if (backendTrap) {
+       verdict = 'TRAP ZONE / NO TRADE';
+    } else if (passedCount >= 16) {
       verdict = isBull ? 'HIGH PROBABILITY BUY CE' : 'HIGH PROBABILITY BUY PE';
     } else if (passedCount >= 12) {
       verdict = 'MODERATE PROBABILITY';
