@@ -15,6 +15,7 @@ import socket
 import sqlite3
 import secrets
 import werkzeug.security
+import gc
 import math
 
 try:
