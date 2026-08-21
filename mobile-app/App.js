@@ -22,11 +22,13 @@ import { OptionBuyerScreen } from './src/screens/OptionBuyerScreen';
 import { ExpiryScalperScreen } from './src/screens/ExpiryScalperScreen';
 import { Sidebar } from './src/components/Sidebar';
 
+import { BottomTabBar } from './src/components/BottomTabBar';
+
 function MainLayout() {
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [webFeatureParams, setWebFeatureParams] = useState(null);
   const [deskSymbol, setDeskSymbol] = useState(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // Sidebar state removed, replaced by Bottom Tabs
 
   const { theme, isDarkMode } = useTheme();
   const styles = getStyles(theme);
@@ -38,11 +40,8 @@ function MainLayout() {
 
   return (
     <View style={styles.mainContainer}>
-      {/* Top Header with Hamburger */}
+      {/* Top Header */}
       <View style={[styles.topHeader, { paddingTop: insets.top }]}>
-        <TouchableOpacity style={styles.hamburgerBtn} onPress={() => setIsSidebarOpen(true)}>
-          <Ionicons name="menu" size={28} color={theme.colors.textPrimary} />
-        </TouchableOpacity>
         {activeTab !== 'Dashboard' && !deskSymbol && (
           <TouchableOpacity style={styles.backButtonPill} onPress={() => setActiveTab('Dashboard')}>
             <Ionicons name="arrow-back" size={20} color={theme.colors.textPrimary} />
@@ -109,14 +108,8 @@ function MainLayout() {
         )}
       </View>
 
-      {/* Sidebar Overlay Component */}
-      <Sidebar 
-        isOpen={isSidebarOpen} 
-        onClose={() => setIsSidebarOpen(false)} 
-        onNavigate={setActiveTab}
-        activeTab={activeTab}
-        onNavigateWebFeature={navigateToWebFeature}
-      />
+      {/* Persistent Bottom Tab Bar */}
+      <BottomTabBar activeTab={activeTab} onNavigate={setActiveTab} />
     </View>
   );
 }

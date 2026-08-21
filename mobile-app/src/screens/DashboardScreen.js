@@ -11,6 +11,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useMarket } from '../context/MarketContext';
 import { IndexHeader } from '../components/IndexHeader';
+import { VitalSignsHUD } from '../components/VitalSignsHUD';
 import { KpiCard } from '../components/KpiCard';
 import { SignalCard } from '../components/SignalCard';
 import { MarketGateCard } from '../components/MarketGateCard';
@@ -437,11 +438,16 @@ export const DashboardScreen = ({ onNavigate }) => {
         </View>
       </Modal>
 
+      <ServerSettingsModal visible={showSettings} onClose={() => setShowSettings(false)} />
     </View>
   );
 };
 
 const getStyles = (theme) => StyleSheet.create({
+  smartActionCard: { flexDirection: 'row', alignItems: 'center', padding: 12, marginHorizontal: 14, marginTop: 12, borderRadius: 8, borderWidth: 1 },
+  smartActionTextContainer: { marginLeft: 10, flex: 1 },
+  smartActionTitle: { fontSize: 13, fontWeight: '900' },
+  smartActionDesc: { fontSize: 11, color: theme.colors.textSecondary, marginTop: 2 },
   container: {
     flex: 1,
     backgroundColor: theme.colors.bgDark,

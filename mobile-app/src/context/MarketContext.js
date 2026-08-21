@@ -249,6 +249,17 @@ export const MarketProvider = ({ children }) => {
     };
   }, [marketData, atm]);
 
+  // Play Audio Alerts on Signal Changes
+  const prevSignal = useRef('NEUTRAL');
+  useEffect(() => {
+    if (!signalAnalysis) return;
+    const current = signalAnalysis.signalType;
+    if (current !== 'NEUTRAL' && current !== prevSignal.current) {
+      soundManager.triggerSignalAlert(current === 'BUY_CE' ? 'BULLISH' : 'BEARISH');
+    }
+    prevSignal.current = current;
+  }, [signalAnalysis]);
+
   // Compute 20-Point Option Buyer Trade Gate Checklist
   const tradeGateAnalysis = useMemo(() => {
     if (!marketData || marketData.isPlaceholder) return { score: 0, total: 20, verdict: 'AWAITING DATA', items: [] };
