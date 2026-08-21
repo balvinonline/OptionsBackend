@@ -247,7 +247,7 @@ export const DashboardScreen = ({ onNavigate }) => {
           </View>
         )}
 
-        <View style={ height: 30 } />
+        <View style={{ height: 30 }} />
       </ScrollView>
 
       {/* Zone Popup Modal */}
