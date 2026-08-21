@@ -68,6 +68,24 @@ app = Flask(__name__, static_folder=str(dist_folder), static_url_path='/')
 app.config["SECRET_KEY"] = "super-secret-dashboard-key"
 CORS(app)
 
+# Serve React App
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_react(path):
+    # Only serve from dist_folder if it actually exists (in production)
+    if not dist_folder.exists():
+        return jsonify({"status": "Backend running, but web app not deployed yet"})
+    
+    # If the file exists in the static folder, serve it
+    if path != "" and (dist_folder / path).exists():
+        return app.send_static_file(path)
+        
+    # Otherwise, fallback to index.html for React Router
+    if (dist_folder / "index.html").exists():
+        return app.send_static_file("index.html")
+    else:
+        return jsonify({"status": "Backend running, but index.html missing"})
+
 from flask_socketio import SocketIO, emit, join_room, leave_room
 socketio = SocketIO(
     app,
