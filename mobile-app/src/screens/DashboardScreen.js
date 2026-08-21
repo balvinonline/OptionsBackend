@@ -80,7 +80,19 @@ export const DashboardScreen = ({ onNavigate }) => {
 
   return (
     <View style={styles.container}>
-      <IndexHeader onOpenSettings={() => setShowSettings(true)} />
+      {/* Kotak Segmented Tabs (Fixed at top) */}
+      <View style={styles.segmentedTabsContainer}>
+        <TouchableOpacity style={styles.segmentedTab}>
+          <Text style={styles.segmentedTabText}>Stocks</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.segmentedTab, styles.segmentedTabActive]}>
+          <Text style={[styles.segmentedTabText, styles.segmentedTabTextActive]}>F&O</Text>
+          <View style={styles.segmentedTabActiveIndicator} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.segmentedTab}>
+          <Text style={styles.segmentedTabText}>Mutual Funds</Text>
+        </TouchableOpacity>
+      </View>
 
       {error ? (
         <View style={styles.errorBanner}>
@@ -99,20 +111,7 @@ export const DashboardScreen = ({ onNavigate }) => {
           />
         }
       >
-        {/* Kotak Segmented Tabs */}
-        <View style={styles.segmentedTabsContainer}>
-          <TouchableOpacity style={styles.segmentedTab}>
-            <Text style={styles.segmentedTabText}>Stocks</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.segmentedTab, styles.segmentedTabActive]}>
-            <Text style={[styles.segmentedTabText, styles.segmentedTabTextActive]}>F&O</Text>
-            <View style={styles.segmentedTabActiveIndicator} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.segmentedTab}>
-            <Text style={styles.segmentedTabText}>Mutual Funds</Text>
-          </TouchableOpacity>
-        </View>
-
+        <IndexHeader onOpenSettings={() => setShowSettings(true)} />
         <VitalSignsHUD marketData={marketData} />
         {renderSmartActionCard()}
         {/* Market Mood Banner */}

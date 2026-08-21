@@ -2,19 +2,20 @@ import React from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMarket } from '../context/MarketContext';
-import { THEME } from '../constants/theme';
+import { useTheme } from '../context/ThemeContext';
 
 export const MarketTape = () => {
+  const { theme } = useTheme();
+  const styles = getStyles(theme);
   const { marketStrip, selectedIndex, setSelectedIndex } = useMarket();
 
   // Fallback default strip symbols if market is closed or loading
   const defaultItems = [
-    { label: 'NIFTY 50', symbol: 'NIFTY', ltp: 24571.20, change: -65.35, change_pct: -0.27 },
-    { label: 'NIFTY BANK', symbol: 'BANKNIFTY', ltp: 57746.10, change: -317.20, change_pct: -0.55 },
+    { label: 'NIFTY', symbol: 'NIFTY', ltp: 24571.20, change: -65.35, change_pct: -0.27 },
+    { label: 'BANKNIFTY', symbol: 'BANKNIFTY', ltp: 57746.10, change: -317.20, change_pct: -0.55 },
     { label: 'SENSEX', symbol: 'SENSEX', ltp: 78499.00, change: -455.59, change_pct: -0.58 },
-    { label: 'NIFTY SMALLCAP 100', symbol: 'NIFTY', ltp: 19868.45, change: -10.45, change_pct: -0.05 },
-    { label: 'NIFTY FIN SERVICE', symbol: 'FINNIFTY', ltp: 26466.80, change: -397.50, change_pct: -1.48 },
-    { label: 'NIFTY MIDCAP 100', symbol: 'MIDCPNIFTY', ltp: 63464.30, change: 136.75, change_pct: 0.22 },
+    { label: 'FINNIFTY', symbol: 'FINNIFTY', ltp: 26466.80, change: -397.50, change_pct: -1.48 },
+    { label: 'MIDCPNIFTY', symbol: 'MIDCPNIFTY', ltp: 63464.30, change: 136.75, change_pct: 0.22 },
   ];
 
   // Merge live items with fallback labels
@@ -25,8 +26,14 @@ export const MarketTape = () => {
         const change = item.change !== null && item.change !== undefined ? Number(item.change) : fallback.change;
         const change_pct = item.change_pct !== null && item.change_pct !== undefined ? Number(item.change_pct) : fallback.change_pct;
 
+        let label = item.label || fallback.label;
+        if (label === 'NIFTY 50') label = 'NIFTY';
+        if (label === 'NIFTY BANK') label = 'BANKNIFTY';
+        if (label === 'NIFTY FIN SERVICE') label = 'FINNIFTY';
+        if (label === 'NIFTY MIDCAP 100') label = 'MIDCPNIFTY';
+
         return {
-          label: item.label || fallback.label,
+          label,
           symbol: item.symbol || fallback.symbol,
           ltp,
           change,
@@ -38,8 +45,11 @@ export const MarketTape = () => {
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <Ionicons name="pulse" size={14} color={THEME.colors.primary} />
-        <Text style={styles.headerTitle}>Market Tape</Text>
+        <Text style={styles.headerTitle}>Market indices</Text>
+        <TouchableOpacity style={styles.viewAllRow}>
+          <Text style={styles.viewAllText}>View all</Text>
+          <Ionicons name="chevron-forward" size={14} color={theme.colors.primary} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -60,14 +70,13 @@ export const MarketTape = () => {
               style={[
                 styles.card,
                 isSelected && styles.cardSelected,
-                isPos ? styles.cardBullish : styles.cardBearish,
               ]}
               onPress={() => {
                 if (item.label?.includes('BANK')) setSelectedIndex('BANKNIFTY');
                 else if (item.label?.includes('FIN')) setSelectedIndex('FINNIFTY');
                 else if (item.label?.includes('MID')) setSelectedIndex('MIDCPNIFTY');
                 else if (item.label?.includes('SENSEX')) setSelectedIndex('SENSEX');
-                else if (item.label?.includes('NIFTY 50')) setSelectedIndex('NIFTY');
+                else if (item.label?.includes('NIFTY')) setSelectedIndex('NIFTY');
               }}
               activeOpacity={0.7}
             >
@@ -76,19 +85,14 @@ export const MarketTape = () => {
               </Text>
 
               <View style={styles.valueRow}>
-                <Text style={[styles.cardPrice, { color: isPos ? THEME.colors.bullish : THEME.colors.bearish }]}>
+                <Text style={styles.cardPrice}>
                   {item.ltp ? Number(item.ltp).toLocaleString('en-IN', { maximumFractionDigits: 1 }) : '--'}
                 </Text>
 
                 <View style={styles.changeBadge}>
-                  <Ionicons
-                    name={isPos ? 'arrow-up' : 'arrow-down'}
-                    size={11}
-                    color={isPos ? THEME.colors.bullish : THEME.colors.bearish}
-                  />
-                  <Text style={[styles.cardChange, { color: isPos ? THEME.colors.bullish : THEME.colors.bearish }]}>
+                  <Text style={[styles.cardChange, { color: isPos ? theme.colors.bullish : theme.colors.bearish }]}>
                     {item.change !== undefined && item.change !== null
-                      ? `${item.change > 0 ? '+' : ''}${item.change.toFixed(1)} (${item.change_pct !== undefined ? item.change_pct.toFixed(2) : '0.00'}%)`
+                      ? `${item.change > 0 ? '+' : ''}${item.change.toFixed(2)} (${item.change > 0 ? '+' : ''}${item.change_pct !== undefined ? item.change_pct.toFixed(2) : '0.00'}%)`
                       : '0.00%'}
                   </Text>
                 </View>
@@ -101,73 +105,71 @@ export const MarketTape = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const getStyles = (theme) => StyleSheet.create({
   container: {
-    marginVertical: 6,
+    marginVertical: 12,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'space-between',
     paddingHorizontal: 14,
-    marginBottom: 6,
+    marginBottom: 10,
   },
   headerTitle: {
-    color: THEME.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
+    color: theme.colors.textMuted,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  viewAllRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  viewAllText: {
+    color: theme.colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+    marginRight: 2,
   },
   scrollContainer: {
     paddingHorizontal: 12,
     gap: 8,
   },
   card: {
-    backgroundColor: '#0c2333',
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    minWidth: 140,
+    backgroundColor: theme.colors.bgCardSolid,
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    minWidth: 130,
     borderWidth: 1,
-    borderColor: 'rgba(56, 189, 248, 0.15)',
-    elevation: 2,
+    borderColor: theme.colors.border,
   },
   cardSelected: {
-    borderColor: THEME.colors.primary,
-    backgroundColor: '#0f3248',
-  },
-  cardBullish: {
-    borderLeftWidth: 3,
-    borderLeftColor: THEME.colors.bullish,
-  },
-  cardBearish: {
-    borderLeftWidth: 3,
-    borderLeftColor: THEME.colors.bearish,
+    borderColor: theme.colors.primary,
   },
   cardLabel: {
-    color: THEME.colors.textMuted,
-    fontSize: 10,
+    color: theme.colors.textPrimary,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.4,
-    marginBottom: 4,
+    marginBottom: 8,
   },
   valueRow: {
     flexDirection: 'column',
   },
   cardPrice: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '900',
-    letterSpacing: 0.3,
+    color: theme.colors.textPrimary,
+    letterSpacing: 0.2,
   },
   changeBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 2,
-    gap: 2,
+    marginTop: 4,
   },
   cardChange: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
   },
 });

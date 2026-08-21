@@ -16,14 +16,35 @@ export const IndexHeader = ({ onOpenSettings }) => {
       {/* Market Tape Spot Tickers */}
       <MarketTape />
 
-      {/* Index Selector Pills */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsContainer}>
+      {/* Option Chain Section Header */}
+      <View style={styles.optionChainHeader}>
+        <Text style={styles.headerTitle}>Option chain</Text>
+        <View style={styles.liveIndicatorRow}>
+          <View style={styles.greenDot} />
+          <Text style={styles.liveIndicatorText}>Live</Text>
+        </View>
+      </View>
+
+      <View style={styles.subFilterRow}>
+        <View style={styles.subFilterActive}>
+          <Text style={styles.subFilterActiveText}>Equity</Text>
+        </View>
+        <View style={styles.subFilter}>
+          <Text style={styles.subFilterText}>Commodities</Text>
+        </View>
+        <View style={styles.subFilter}>
+          <Text style={styles.subFilterText}>Expiry soon</Text>
+        </View>
+      </View>
+
+      {/* Circular Index Badges */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.badgesContainer}>
         {SUPPORTED_INDEXES.map((idx) => {
           const isActive = selectedIndex === idx;
           return (
             <TouchableOpacity
               key={idx}
-              style={[styles.pill, isActive && styles.pillActive]}
+              style={styles.badgeWrapper}
               onPress={() => {
                 requestAnimationFrame(() => {
                   setTimeout(() => {
@@ -33,7 +54,12 @@ export const IndexHeader = ({ onOpenSettings }) => {
               }}
               activeOpacity={0.7}
             >
-              <Text style={[styles.pillText, isActive && styles.pillTextActive]}>{idx}</Text>
+              <View style={[styles.circleBadge, isActive && styles.circleBadgeActive]}>
+                <Text style={[styles.circleBadgeIconText, isActive && styles.circleBadgeIconTextActive]}>
+                  {idx.substring(0, 1)}
+                </Text>
+              </View>
+              <Text style={[styles.badgeLabel, isActive && styles.badgeLabelActive]}>{idx}</Text>
             </TouchableOpacity>
           );
         })}
@@ -45,43 +71,13 @@ export const IndexHeader = ({ onOpenSettings }) => {
 const getStyles = (theme) => StyleSheet.create({
   container: {
     backgroundColor: theme.colors.bgDark,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.borderLight,
     paddingTop: 8,
-    paddingBottom: 10,
+    paddingBottom: 16,
   },
-  topRow: {
+  optionChainHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
-    paddingHorizontal: 14,
-  },
-  branding: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  brandTitle: {
-    color: theme.colors.textPrimary,
-    fontWeight: '900',
-    fontSize: 15,
-    letterSpacing: 0.8,
-  },
-  buildText: {
-    color: theme.colors.primary,
-    fontSize: 8,
-    fontWeight: '800',
-  },
-  statusGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  connectionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.bgCard,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 12,
