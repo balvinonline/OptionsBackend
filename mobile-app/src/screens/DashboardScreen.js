@@ -105,6 +105,29 @@ export const DashboardScreen = ({ onNavigate }) => {
         {sectorStocks && sectorStocks.length > 0 && (
           <View style={styles.sectorCard}>
             <Text style={styles.sectorCardTitle}>Sector Performance</Text>
+            
+            {/* Summary Cards */}
+            <View style={styles.sectorSummaryGrid}>
+              <View style={[styles.sectorSummaryBox, { borderColor: theme.colors.bullish }]}>
+                <Text style={styles.sectorSummaryLabel}>Sectors Up</Text>
+                <Text style={[styles.sectorSummaryValue, { color: theme.colors.bullish }]}>
+                  {sectorStocks.filter(s => (s.change_pct || 0) > 0).length}
+                </Text>
+              </View>
+              <View style={[styles.sectorSummaryBox, { borderColor: theme.colors.bearish }]}>
+                <Text style={styles.sectorSummaryLabel}>Sectors Down</Text>
+                <Text style={[styles.sectorSummaryValue, { color: theme.colors.bearish }]}>
+                  {sectorStocks.filter(s => (s.change_pct || 0) < 0).length}
+                </Text>
+              </View>
+              <View style={[styles.sectorSummaryBox, { borderColor: theme.colors.borderLight }]}>
+                <Text style={styles.sectorSummaryLabel}>Net Move</Text>
+                <Text style={[styles.sectorSummaryValue, { color: theme.colors.textPrimary }]}>
+                  {(sectorStocks.reduce((acc, s) => acc + (s.change_pct || 0), 0) / (sectorStocks.length || 1)).toFixed(2)}%
+                </Text>
+              </View>
+            </View>
+
             {sectorStocks
               .filter(s => s.name && s.change_pct !== null)
               .sort((a, b) => b.change_pct - a.change_pct)
@@ -823,6 +846,28 @@ const getStyles = (theme) => StyleSheet.create({
     fontWeight: '800',
     color: theme.colors.textPrimary,
     marginBottom: 12,
+  },
+  sectorSummaryGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  sectorSummaryBox: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 8,
+    marginHorizontal: 4,
+    backgroundColor: theme.colors.bgDark,
+  },
+  sectorSummaryLabel: {
+    fontSize: 10,
+    color: theme.colors.textSecondary,
+    marginBottom: 4,
+  },
+  sectorSummaryValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   sectorRow: {
     flexDirection: 'row',
