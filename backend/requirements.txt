@@ -11,3 +11,5 @@ gevent
 gevent-websocket
 pytz
 scipy
+ 
+simple-websocket
