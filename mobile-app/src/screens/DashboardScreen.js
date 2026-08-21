@@ -69,6 +69,21 @@ export const DashboardScreen = ({ onNavigate }) => {
           />
         }
       >
+        {/* Market Mood Banner */}
+        {sectorStocks && (
+          <View style={styles.moodCard}>
+            <Text style={styles.moodTitle}>Market Mood (Nifty 50)</Text>
+            <View style={styles.moodBarContainer}>
+              <View style={[styles.moodBarBullish, { flex: sectorStocks.advances || 1 }]} />
+              <View style={[styles.moodBarBearish, { flex: sectorStocks.declines || 1 }]} />
+            </View>
+            <View style={styles.moodLabels}>
+              <Text style={styles.moodAdvances}>{sectorStocks.advances} Advances</Text>
+              <Text style={styles.moodDeclines}>{sectorStocks.declines} Declines</Text>
+            </View>
+          </View>
+        )}
+
         {/* Market Trend Banner */}
         {signalAnalysis?.gateStatus && (
           <View style={[styles.trendBanner, signalAnalysis.gateStatus === 'BULLISH' ? styles.trendBullish : signalAnalysis.gateStatus === 'BEARISH' ? styles.trendBearish : styles.trendNeutral]}>

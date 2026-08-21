@@ -99,7 +99,7 @@ export const ExpiryScalperScreen = () => {
                 </View>
                 <View style={styles.statBox}>
                   <Text style={styles.statLabel}>Day Change</Text>
-                  <Text style={[styles.statValue, { color: c.chg > 0 ? theme.colors.success : theme.colors.danger }]}>
+                  <Text style={[styles.statValue, { color: c.chg > 0 ? theme.colors.bullish : theme.colors.bearish }]}>
                     {c.chg > 0 ? '+' : ''}{c.chg.toFixed(1)}
                   </Text>
                 </View>
@@ -125,7 +125,7 @@ export const ExpiryScalperScreen = () => {
 };
 
 const getStyles = (theme) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
+  container: { flex: 1, backgroundColor: theme.colors.bgDark },
   scrollArea: { flex: 1, padding: 16 },
   header: { marginBottom: 20 },
   title: { fontSize: 22, fontWeight: 'bold', color: theme.colors.textPrimary, marginBottom: 8 },
@@ -134,7 +134,7 @@ const getStyles = (theme) => StyleSheet.create({
   emptyText: { fontSize: 16, color: theme.colors.textPrimary, fontWeight: '600' },
   emptySub: { fontSize: 13, color: theme.colors.textMuted },
   candidateCard: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.bgCardSolid,
     borderRadius: 12,
     padding: 16,
     marginBottom: 16,

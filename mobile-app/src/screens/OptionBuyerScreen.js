@@ -177,7 +177,7 @@ const getStyles = (theme) => StyleSheet.create({
   },
   card: {
     flex: 1,
-    backgroundColor: theme.colors.surfaceLight,
+    backgroundColor: theme.colors.bgCardSolid,
     padding: 16,
     borderRadius: 8,
     marginHorizontal: 4,
@@ -203,7 +203,7 @@ const getStyles = (theme) => StyleSheet.create({
     marginBottom: 10,
   },
   chainContainer: {
-    backgroundColor: theme.colors.surfaceLight,
+    backgroundColor: theme.colors.bgCardSolid,
     borderRadius: 8,
     padding: 10,
     marginBottom: 20,
