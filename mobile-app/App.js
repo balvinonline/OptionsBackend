@@ -35,6 +35,23 @@ function MainLayout() {
   const styles = getStyles(theme);
   const insets = useSafeAreaInsets();
 
+  const getScreenTitle = (tab) => {
+    switch(tab) {
+      case 'OptionBuyer': return 'Buyer Hub';
+      case 'Chain': return 'Option Chain & OI';
+      case 'Scanner': return 'Scanner & Screeners';
+      case 'TradeGate': return 'Trade Gate Rules';
+      case 'Signals': return 'Live Signals';
+      case 'Chart': return 'Live Chart';
+      case 'StockOptions': return 'Stock Options Desk';
+      case 'Settings': return 'Settings';
+      case 'More': return 'More Tools';
+      case 'PCR': return 'PCR Analytics';
+      case 'ExpiryScalper': return 'Expiry Scalper';
+      default: return 'Options Desk';
+    }
+  };
+
   const navigateToWebFeature = (featurePath) => {
     setWebFeatureParams({ featurePath });
   };
@@ -53,20 +70,19 @@ function MainLayout() {
               <Text style={styles.kotakSearchText}>Search eg: NIFTY CE</Text>
             </View>
             <View style={styles.kotakHeaderIcons}>
-              <Ionicons name="wallet-outline" size={22} color={theme.colors.textPrimary} />
-              <Ionicons name="notifications-outline" size={22} color={theme.colors.textPrimary} style={{ marginLeft: 15 }} />
+              <Ionicons name="notifications-outline" size={22} color={theme.colors.textPrimary} />
             </View>
           </View>
         ) : (
           <>
-            {activeTab !== 'Dashboard' && !deskSymbol && (
+            {!deskSymbol && (
               <TouchableOpacity style={styles.backButtonPill} onPress={() => setActiveTab('Dashboard')}>
                 <Ionicons name="arrow-back" size={18} color={theme.colors.textPrimary} />
                 <Text style={styles.backButtonText}>Back</Text>
               </TouchableOpacity>
             )}
             <Text style={styles.headerTitle}>
-              {deskSymbol ? `${deskSymbol} Desk` : activeTab === 'Settings' ? 'Settings' : 'Options Desk'}
+              {deskSymbol ? `${deskSymbol} Desk` : getScreenTitle(activeTab)}
             </Text>
           </>
         )}

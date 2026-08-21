@@ -46,10 +46,6 @@ export const MarketTape = () => {
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.headerTitle}>Market indices</Text>
-        <TouchableOpacity style={styles.viewAllRow}>
-          <Text style={styles.viewAllText}>View all</Text>
-          <Ionicons name="chevron-forward" size={14} color={theme.colors.primary} />
-        </TouchableOpacity>
       </View>
 
       <ScrollView

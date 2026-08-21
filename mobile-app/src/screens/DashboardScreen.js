@@ -164,6 +164,20 @@ export const DashboardScreen = ({ onNavigate }) => {
             </Text>
           </View>
         )}
+
+            <View style={[styles.menuListContainer, { marginTop: 16 }]}>
+              <TouchableOpacity style={styles.menuListItem} onPress={() => onNavigate && onNavigate('Scanner')}>
+                <View style={styles.menuListLeft}>
+                  <Ionicons name="pie-chart" size={20} color={theme.colors.primary} />
+                  <View>
+                    <Text style={styles.menuListTitle}>Sector Performance</Text>
+                    <Text style={styles.menuListSub}>Market breadth & heatmaps</Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+
           </View>
         )}
 
