@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useMarket } from '../context/MarketContext';
+import { Ionicons } from '@expo/vector-icons';
 import { IndexHeader } from '../components/IndexHeader';
 import { OrderExecutionModal } from '../components/OrderExecutionModal';
 

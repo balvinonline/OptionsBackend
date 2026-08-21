@@ -112,13 +112,7 @@ export const DashboardScreen = ({ onNavigate }) => {
           <Text style={[styles.segmentedTabText, activeDashTab === 'F&O' && styles.segmentedTabTextActive]}>F&O</Text>
           {activeDashTab === 'F&O' && <View style={styles.segmentedTabActiveIndicator} />}
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.segmentedTab, activeDashTab === 'Sectors' && styles.segmentedTabActive]}
-          onPress={() => setActiveDashTab('Sectors')}
-        >
-          <Text style={[styles.segmentedTabText, activeDashTab === 'Sectors' && styles.segmentedTabTextActive]}>Sectors</Text>
-          {activeDashTab === 'Sectors' && <View style={styles.segmentedTabActiveIndicator} />}
-        </TouchableOpacity>
+        
       </View>
 
       {error ? (
@@ -140,9 +134,12 @@ export const DashboardScreen = ({ onNavigate }) => {
       >
         <IndexHeader onOpenSettings={() => setShowSettings(true)} />
         <VitalSignsHUD marketData={marketData} />
-        {renderSmartActionCard()}
-        {/* Market Mood Banner */}
-        {hasAdData && (
+
+        {/* --- TAB 1: STOCKS (Broader Market) --- */}
+        {activeDashTab === 'Stocks' && (
+          <View>
+            {renderSmartActionCard()}
+            {hasAdData && (
           <View style={styles.moodCard}>
             <Text style={styles.moodTitle}>Market Mood ({selectedIndex})</Text>
             <View style={styles.moodBarContainer}>
@@ -155,9 +152,7 @@ export const DashboardScreen = ({ onNavigate }) => {
             </View>
           </View>
         )}
-
-        {/* Market Trend Banner */}
-        {signalAnalysis?.gateStatus && (
+            {signalAnalysis?.gateStatus && (
           <View style={[styles.trendBanner, signalAnalysis.gateStatus === 'BULLISH' ? styles.trendBullish : signalAnalysis.gateStatus === 'BEARISH' ? styles.trendBearish : styles.trendNeutral]}>
             <Ionicons 
               name={signalAnalysis.gateStatus === 'BULLISH' ? 'trending-up' : signalAnalysis.gateStatus === 'BEARISH' ? 'trending-down' : 'swap-horizontal'} 
@@ -169,74 +164,13 @@ export const DashboardScreen = ({ onNavigate }) => {
             </Text>
           </View>
         )}
-
-        {/* Sector Performance diverging bar chart */}
-        {sectorStocks && sectorStocks.length > 0 && (
-          <View style={styles.sectorCard}>
-            <Text style={styles.sectorCardTitle}>Sector Performance</Text>
-            
-            {/* Summary Cards */}
-            <View style={styles.sectorSummaryGrid}>
-              <View style={[styles.sectorSummaryBox, { borderColor: theme.colors.bullish }]}>
-                <Text style={styles.sectorSummaryLabel}>Sectors Up</Text>
-                <Text style={[styles.sectorSummaryValue, { color: theme.colors.bullish }]}>
-                  {sectorStocks.filter(s => (s.change_pct || 0) > 0).length}
-                </Text>
-              </View>
-              <View style={[styles.sectorSummaryBox, { borderColor: theme.colors.bearish }]}>
-                <Text style={styles.sectorSummaryLabel}>Sectors Down</Text>
-                <Text style={[styles.sectorSummaryValue, { color: theme.colors.bearish }]}>
-                  {sectorStocks.filter(s => (s.change_pct || 0) < 0).length}
-                </Text>
-              </View>
-              <View style={[styles.sectorSummaryBox, { borderColor: theme.colors.borderLight }]}>
-                <Text style={styles.sectorSummaryLabel}>Net Move</Text>
-                <Text style={[styles.sectorSummaryValue, { color: theme.colors.textPrimary }]}>
-                  {(sectorStocks.reduce((acc, s) => acc + (s.change_pct || 0), 0) / (sectorStocks.length || 1)).toFixed(2)}%
-                </Text>
-              </View>
-            </View>
-
-            {sectorStocks
-              .filter(s => s.name && s.change_pct !== null)
-              .sort((a, b) => b.change_pct - a.change_pct)
-              .map((s, idx) => {
-                const isBull = s.change_pct >= 0;
-                const barWidth = Math.min(Math.abs(s.change_pct) * 20, 100); // Scale pct to width
-                
-                return (
-                  <TouchableOpacity key={idx} style={styles.sectorRow} onPress={() => fetchSectorDetails(s.name)}>
-                    <Text style={styles.sectorName} numberOfLines={1}>{s.name}</Text>
-                    
-                    <View style={styles.divergingTrack}>
-                      {/* Negative side */}
-                      <View style={styles.divergingSideLeft}>
-                        {!isBull && (
-                          <View style={[styles.divergingBar, { backgroundColor: theme.colors.bearish, width: `${barWidth}%` }]} />
-                        )}
-                      </View>
-                      
-                      {/* Center line */}
-                      <View style={styles.centerLine} />
-                      
-                      {/* Positive side */}
-                      <View style={styles.divergingSideRight}>
-                        {isBull && (
-                          <View style={[styles.divergingBar, { backgroundColor: theme.colors.bullish, width: `${barWidth}%` }]} />
-                        )}
-                      </View>
-                    </View>
-                    
-                    <Text style={[styles.sectorPct, { color: isBull ? theme.colors.bullish : theme.colors.bearish }]}>
-                      {s.change_pct > 0 ? '+' : ''}{s.change_pct?.toFixed(2)}%
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
           </View>
         )}
 
-        {tradeZone ? (
+        {/* --- TAB 2: F&O (Options Data & Signals) --- */}
+        {activeDashTab === 'F&O' && (
+          <View>
+            {tradeZone ? (
           <TouchableOpacity
             activeOpacity={0.85}
             style={[styles.zoneCard, { backgroundColor: zoneBg, borderColor: zoneBorder }]}
@@ -260,83 +194,6 @@ export const DashboardScreen = ({ onNavigate }) => {
             </View>
           </TouchableOpacity>
         ) : null}
-
-        {/* --- TAB 1: STOCKS (Broader Market) --- */}
-        {activeDashTab === 'Stocks' && (
-          <>
-            {/* Market Mood Banner */}
-            <View style={styles.moodBanner}>
-              <Text style={styles.moodTitle}>Market Mood ({selectedIndex})</Text>
-              <View style={styles.moodBarContainer}>
-                <View style={[styles.moodBarFill, { backgroundColor: theme.colors.bullish, flex: mood.advances }]} />
-                <View style={[styles.moodBarFill, { backgroundColor: theme.colors.bearish, flex: mood.declines }]} />
-              </View>
-              <View style={styles.moodLabels}>
-                <Text style={[styles.moodLabelText, { color: theme.colors.bullish }]}>{mood.advances} Advances</Text>
-                <Text style={[styles.moodLabelText, { color: theme.colors.bearish }]}>{mood.declines} Declines</Text>
-              </View>
-            </View>
-
-            {/* Quick Actions (Dashboard Tools) */}
-            <View style={styles.quickActionsRow}>
-              <TouchableOpacity style={styles.quickActionBtn} onPress={() => onNavigate && onNavigate('PCR')}>
-                <Ionicons name="bar-chart" size={18} color={theme.colors.primary} />
-                <Text style={styles.quickActionTitle}>PCR 5m/15m</Text>
-                <Text style={styles.quickActionSub}>Trend Data</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.quickActionBtn} onPress={() => onNavigate && onNavigate('SignalJournal')}>
-                <Ionicons name="journal" size={18} color={theme.colors.warning} />
-                <Text style={styles.quickActionTitle}>Journal</Text>
-                <Text style={styles.quickActionSub}>Live Logs</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.quickActionBtn} onPress={() => onNavigate && onNavigate('Chain')}>
-                <Ionicons name="layers" size={18} color="#a855f7" />
-                <Text style={styles.quickActionTitle}>Chain</Text>
-                <Text style={styles.quickActionSub}>Strikes</Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
-
-        {/* --- TAB 2: F&O (Options Data & Signals) --- */}
-        {activeDashTab === 'F&O' && (
-          <>
-            <VitalSignsHUD marketData={marketData} />
-            
-            {/* Trade Alerts */}
-            {renderSmartActionCard()}
-            {moveConfirmation ? (
-              <View style={styles.confirmCard}>
-                <View style={styles.confirmTopRow}>
-                  <View>
-                    <Text style={styles.confirmLabel}>MOVE CONFIRMATION</Text>
-                    <Text style={[styles.confirmTitle, moveConfirmation.side === 'CE' ? { color: theme.colors.bullish } : moveConfirmation.side === 'PE' ? { color: theme.colors.bearish } : { color: theme.colors.warning }]}>{moveConfirmation.verdict}</Text>
-                  </View>
-                  <Text style={styles.confirmScore}>{moveConfirmation.score}/{moveConfirmation.total}</Text>
-                </View>
-                <Text style={styles.confirmReason}>{moveConfirmation.reason}</Text>
-                <View style={styles.confirmGrid}>
-                  {[
-                    ['EMA', moveConfirmation.ema?.label, moveConfirmation.ema?.side],
-                    ['VWAP', moveConfirmation.vwap?.label, moveConfirmation.vwap?.side],
-                    ['Premium', moveConfirmation.premium?.label, moveConfirmation.premium?.side],
-                    ['Volume', moveConfirmation.volume?.label, moveConfirmation.volume?.status],
-                    ['Wall', moveConfirmation.wall?.label, moveConfirmation.wall?.side],
-                    ['PCR', moveConfirmation.pcr?.label, moveConfirmation.pcr?.side],
-                  ].map(([label, value, tone]) => (
-                    <View key={label} style={[styles.confirmChip, (tone === 'CE' || tone === 'Strong') ? styles.confirmChipBull : tone === 'PE' ? styles.confirmChipBear : styles.confirmChipWait]}>
-                      <Text style={styles.confirmChipLabel}>{label}</Text>
-                      <Text style={styles.confirmChipValue} numberOfLines={1}>{value || '-'}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            ) : null}
-
-            <SignalCard signalAnalysis={signalAnalysis} indexSymbol={selectedIndex} />
-            <MarketGateCard signalAnalysis={signalAnalysis} />
-
-            {/* Clickable Detail Rooms (Progressive Disclosure) */}
             <View style={styles.menuListContainer}>
               <Text style={styles.sectionTitle}>Detailed Analytics</Text>
 
@@ -386,47 +243,11 @@ export const DashboardScreen = ({ onNavigate }) => {
                 <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
               </TouchableOpacity>
             </View>
-          </>
-        )}
-
-        {/* --- TAB 3: SECTORS (Market Breadth) --- */}
-        {activeDashTab === 'Sectors' && (
-          <View style={{ marginTop: 10 }}>
-            <View style={styles.sectorCard}>
-              <Text style={styles.sectionTitle}>Sector Performance</Text>
-              <View style={styles.sectorKpis}>
-                <View style={[styles.sectorKpiBox, { borderColor: theme.colors.bullishBorder || theme.colors.bullish }]}>
-                  <Text style={styles.sectorKpiLabel}>Sectors Up</Text>
-                  <Text style={[styles.sectorKpiValue, { color: theme.colors.bullish }]}>{sectorStats.up}</Text>
-                </View>
-                <View style={[styles.sectorKpiBox, { borderColor: theme.colors.bearishBorder || theme.colors.bearish }]}>
-                  <Text style={styles.sectorKpiLabel}>Sectors Down</Text>
-                  <Text style={[styles.sectorKpiValue, { color: theme.colors.bearish }]}>{sectorStats.down}</Text>
-                </View>
-                <View style={styles.sectorKpiBox}>
-                  <Text style={styles.sectorKpiLabel}>Net Move</Text>
-                  <Text style={[styles.sectorKpiValue, { color: theme.colors.textPrimary }]}>{(sectorStats.netMove * 100).toFixed(2)}%</Text>
-                </View>
-              </View>
-            </View>
-            
-            {/* Show full sector list directly in the tab instead of a modal! */}
-            <View style={{ paddingHorizontal: 14, marginTop: 16 }}>
-              {sectorStocks && sectorStocks.length > 0 ? sectorStocks.map((sector, i) => (
-                <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight }}>
-                  <Text style={{ color: theme.colors.textPrimary, fontWeight: '700', fontSize: 13, flex: 1 }}>{sector.name || sector.symbol}</Text>
-                  <Text style={{ color: (sector.change_pct || 0) > 0 ? theme.colors.bullish : theme.colors.bearish, fontWeight: '800', fontSize: 13 }}>
-                    {(sector.change_pct || 0) > 0 ? '+' : ''}{(sector.change_pct || 0).toFixed(2)}%
-                  </Text>
-                </View>
-              )) : (
-                <Text style={{ color: theme.colors.textMuted, textAlign: 'center', marginTop: 20 }}>No sector data available</Text>
-              )}
-            </View>
+          
           </View>
         )}
 
-        <View style={{ height: 30 }} />
+        <View style={ height: 30 } />
       </ScrollView>
 
       {/* Zone Popup Modal */}
@@ -482,39 +303,7 @@ export const DashboardScreen = ({ onNavigate }) => {
         </View>
       </Modal>
 
-      {/* Sector Details Modal */}
-      <Modal visible={sectorModalVisible} transparent animationType="slide" onRequestClose={() => setSectorModalVisible(false)}>
-        <View style={styles.zoneModalOverlay}>
-          <View style={[styles.zoneModalContent, { flex: 0.8, backgroundColor: theme.colors.bgDark }]}>
-            <View style={styles.zoneModalHead}>
-              <Text style={styles.zoneModalTitle}>Sector Details</Text>
-              <TouchableOpacity style={styles.zoneCloseBtn} onPress={() => setSectorModalVisible(false)}>
-                <Text style={styles.zoneCloseText}>Close</Text>
-              </TouchableOpacity>
-            </View>
-
-            {loadingSector ? (
-              <Text style={{color: theme.colors.textMuted, textAlign: 'center', marginTop: 20}}>Loading...</Text>
-            ) : selectedSectorDetails ? (
-              <ScrollView style={{marginTop: 10}}>
-                <Text style={{color: theme.colors.textPrimary, fontSize: 18, fontWeight: 'bold', marginBottom: 12}}>
-                  {selectedSectorDetails.sector}
-                </Text>
-                {(selectedSectorDetails.rows || []).map((stock, i) => (
-                  <View key={i} style={{flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight}}>
-                    <Text style={{color: theme.colors.textPrimary, fontWeight: 'bold', flex: 1}}>{stock.symbol}</Text>
-                    <Text style={{color: (stock.change_pct || 0) > 0 ? theme.colors.bullish : theme.colors.bearish, fontWeight: 'bold'}}>
-                      {(stock.change_pct || 0) > 0 ? '+' : ''}{Number(stock.change_pct || 0).toFixed(2)}%
-                    </Text>
-                  </View>
-                ))}
-              </ScrollView>
-            ) : (
-              <Text style={{color: theme.colors.textMuted, textAlign: 'center', marginTop: 20}}>No data available.</Text>
-            )}
-          </View>
-        </View>
-      </Modal>
+      
 
       <ServerSettingsModal visible={showSettings} onClose={() => setShowSettings(false)} />
     </View>
