@@ -1,10 +1,18 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View, ScrollView } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View, ScrollView, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SUPPORTED_INDEXES, useMarket } from '../context/MarketContext';
 import { MarketTape } from './MarketTape';
 import { useTheme } from '../context/ThemeContext';
 import { APP_BUILD_LABEL } from '../services/buildInfo';
+
+const INDEX_ICONS = {
+  'NIFTY': require('../../assets/nifty50.png'),
+  'BANKNIFTY': require('../../assets/bank nifty.png'),
+  'SENSEX': require('../../assets/sensex.png'),
+  'FINNIFTY': require('../../assets/finnifty.png'),
+  'MIDCPNIFTY': require('../../assets/nifty midcap.png'),
+};
 
 export const IndexHeader = ({ onOpenSettings }) => {
   const { theme } = useTheme();
@@ -45,10 +53,14 @@ export const IndexHeader = ({ onOpenSettings }) => {
               }}
               activeOpacity={0.7}
             >
-              <View style={[styles.circleBadge, isActive && styles.circleBadgeActive]}>
-                <Text style={[styles.circleBadgeIconText, isActive && styles.circleBadgeIconTextActive]}>
-                  {idx.substring(0, 1)}
-                </Text>
+              <View style={[styles.circleBadge, isActive && styles.circleBadgeActive, { padding: 0, overflow: 'hidden' }]}>
+                {INDEX_ICONS[idx] ? (
+                  <Image source={INDEX_ICONS[idx]} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                ) : (
+                  <Text style={[styles.circleBadgeIconText, isActive && styles.circleBadgeIconTextActive]}>
+                    {idx.substring(0, 1)}
+                  </Text>
+                )}
               </View>
               <Text style={[styles.badgeLabel, isActive && styles.badgeLabelActive]}>{idx}</Text>
             </TouchableOpacity>
