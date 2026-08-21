@@ -43,13 +43,33 @@ function MainLayout() {
     <View style={styles.mainContainer}>
       {/* Top Header */}
       <View style={[styles.topHeader, { paddingTop: insets.top }]}>
-        {activeTab !== 'Dashboard' && !deskSymbol && (
-          <TouchableOpacity style={styles.backButtonPill} onPress={() => setActiveTab('Dashboard')}>
-            <Ionicons name="arrow-back" size={20} color={theme.colors.textPrimary} />
-            <Text style={styles.backButtonText}>Back</Text>
-          </TouchableOpacity>
+        {activeTab === 'Dashboard' && !deskSymbol ? (
+          <View style={styles.kotakHeader}>
+            <View style={styles.kotakAvatar}>
+              <Ionicons name="person" size={14} color={theme.colors.bgCardSolid} />
+            </View>
+            <View style={styles.kotakSearch}>
+              <Ionicons name="search" size={16} color={theme.colors.textMuted} />
+              <Text style={styles.kotakSearchText}>Search eg: NIFTY CE</Text>
+            </View>
+            <View style={styles.kotakHeaderIcons}>
+              <Ionicons name="wallet-outline" size={22} color={theme.colors.textPrimary} />
+              <Ionicons name="notifications-outline" size={22} color={theme.colors.textPrimary} style={{ marginLeft: 15 }} />
+            </View>
+          </View>
+        ) : (
+          <>
+            {activeTab !== 'Dashboard' && !deskSymbol && (
+              <TouchableOpacity style={styles.backButtonPill} onPress={() => setActiveTab('Dashboard')}>
+                <Ionicons name="arrow-back" size={18} color={theme.colors.textPrimary} />
+                <Text style={styles.backButtonText}>Back</Text>
+              </TouchableOpacity>
+            )}
+            <Text style={styles.headerTitle}>
+              {deskSymbol ? `${deskSymbol} Desk` : activeTab === 'Settings' ? 'Settings' : 'Options Desk'}
+            </Text>
+          </>
         )}
-        <Text style={styles.headerTitle}>{deskSymbol ? `${deskSymbol} Desk` : (activeTab === 'Dashboard' ? 'Dashboard' : 'Options Desk')}</Text>
       </View>
 
       {/* Screen Views with conditional rendering to prevent out-of-memory crashes on mobile */}
@@ -168,20 +188,52 @@ const getStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.bgDark,
   },
   topHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: theme.colors.bgDark,
-    paddingHorizontal: 15,
-    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.borderLight,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  hamburgerBtn: {
-    marginRight: 15,
+  kotakHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    justifyContent: 'space-between',
+  },
+  kotakAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  kotakSearch: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.bgCardSolid,
+    marginHorizontal: 12,
+    paddingHorizontal: 12,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  kotakSearchText: {
+    color: theme.colors.textMuted,
+    fontSize: 13,
+    marginLeft: 8,
+  },
+  kotakHeaderIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '700',
     color: theme.colors.textPrimary,
   },
   screenContainer: {

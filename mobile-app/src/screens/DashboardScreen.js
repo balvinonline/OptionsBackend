@@ -99,6 +99,20 @@ export const DashboardScreen = ({ onNavigate }) => {
           />
         }
       >
+        {/* Kotak Segmented Tabs */}
+        <View style={styles.segmentedTabsContainer}>
+          <TouchableOpacity style={styles.segmentedTab}>
+            <Text style={styles.segmentedTabText}>Stocks</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.segmentedTab, styles.segmentedTabActive]}>
+            <Text style={[styles.segmentedTabText, styles.segmentedTabTextActive]}>F&O</Text>
+            <View style={styles.segmentedTabActiveIndicator} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.segmentedTab}>
+            <Text style={styles.segmentedTabText}>Mutual Funds</Text>
+          </TouchableOpacity>
+        </View>
+
         <VitalSignsHUD marketData={marketData} />
         {renderSmartActionCard()}
         {/* Market Mood Banner */}
@@ -454,6 +468,38 @@ export const DashboardScreen = ({ onNavigate }) => {
 };
 
 const getStyles = (theme) => StyleSheet.create({
+  segmentedTabsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.borderLight,
+    paddingTop: 8,
+    marginBottom: 8,
+  },
+  segmentedTab: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    position: 'relative',
+  },
+  segmentedTabText: {
+    color: theme.colors.textMuted,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  segmentedTabTextActive: {
+    color: theme.colors.primary,
+    fontWeight: '700',
+  },
+  segmentedTabActiveIndicator: {
+    position: 'absolute',
+    bottom: -1,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: theme.colors.primary,
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
+  },
   smartActionCard: { flexDirection: 'row', alignItems: 'center', padding: 12, marginHorizontal: 14, marginTop: 12, borderRadius: 8, borderWidth: 1 },
   smartActionTextContainer: { marginLeft: 10, flex: 1 },
   smartActionTitle: { fontSize: 13, fontWeight: '900' },

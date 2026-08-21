@@ -50,30 +50,33 @@ const getStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.bgCardSolid,
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
-    paddingTop: 10,
-    justifyContent: 'space-around',
+    paddingTop: 8,
+    paddingBottom: 4,
+    justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: 10,
     ...theme.shadows.card,
   },
   tabButton: {
     alignItems: 'center',
+    justifyContent: 'center',
     flex: 1,
   },
   iconContainer: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 4,
-    borderRadius: 20,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   activeIconContainer: {
-    backgroundColor: theme.colors.primary + '20',
+    // Kotak Neo does not use pill backgrounds for active tabs, just icon color
   },
   tabLabel: {
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
     color: theme.colors.textMuted,
   },
   activeTabLabel: {
     color: theme.colors.primary,
+    fontWeight: '700',
   },
 });
