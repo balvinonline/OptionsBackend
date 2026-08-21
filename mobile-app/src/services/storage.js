@@ -31,12 +31,7 @@ export const getDefaultServerUrl = () => {
 };
 
 export const getStoredServerUrl = async () => {
-  try {
-    const url = await AsyncStorage.getItem(KEYS.SERVER_URL);
-    return normalizeServerUrl(url || getDefaultServerUrl());
-  } catch {
-    return getDefaultServerUrl();
-  }
+  return CLOUD_SERVER_URL;
 };
 
 export const setStoredServerUrl = async (url) => {

@@ -3,11 +3,6 @@ import { getDefaultServerUrl, getStoredAuth, getStoredServerUrl, normalizeServer
 
 let currentServerUrl = getDefaultServerUrl();
 
-// Initialize server URL from storage
-getStoredServerUrl().then((url) => {
-  currentServerUrl = url;
-});
-
 export const setApiBaseUrl = (url) => {
   currentServerUrl = normalizeServerUrl(url);
 };
