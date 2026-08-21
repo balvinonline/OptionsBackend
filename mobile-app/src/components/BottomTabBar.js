@@ -14,6 +14,7 @@ export function BottomTabBar({ activeTab, onNavigate }) {
     { id: 'OptionBuyer', icon: 'rocket', label: 'Buyer Hub' },
     { id: 'ExpiryScalper', icon: 'flash', label: 'Zero Hero' },
     { id: 'Scanner', icon: 'search', label: 'Scanner' },
+    { id: 'More', icon: 'grid', label: 'More' },
   ];
 
   return (

@@ -20,6 +20,7 @@ import { StockDeskScreen } from './src/screens/StockDeskScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { OptionBuyerScreen } from './src/screens/OptionBuyerScreen';
 import { ExpiryScalperScreen } from './src/screens/ExpiryScalperScreen';
+import { MoreMenuScreen } from './src/screens/MoreMenuScreen';
 import { Sidebar } from './src/components/Sidebar';
 
 import { BottomTabBar } from './src/components/BottomTabBar';
@@ -67,6 +68,10 @@ function MainLayout() {
 
         <View style={[styles.screenWrapper, activeTab === 'Stock' && !webFeatureParams && !deskSymbol && styles.screenVisible]}>
           {activeTab === 'Stock' && <StockOptionsScreen onNavigate={setActiveTab} onNavigateDesk={(sym) => setDeskSymbol(sym)} />}
+        </View>
+
+        <View style={[styles.screenWrapper, activeTab === 'More' && !webFeatureParams && !deskSymbol && styles.screenVisible]}>
+          {activeTab === 'More' && <MoreMenuScreen onNavigate={setActiveTab} />}
         </View>
 
         <View style={[styles.screenWrapper, activeTab === 'Settings' && !webFeatureParams && !deskSymbol && styles.screenVisible]}>
