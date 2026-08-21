@@ -32,10 +32,10 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
 
   const getSignal = (priceChange, oiChange, side) => {
     if (priceChange == null || oiChange == null) return null;
-    if (priceChange < 0 && oiChange > 0) return { text: `${side} Writing`, color: '#D50000' };
-    if (priceChange > 0 && oiChange < 0) return { text: `${side} Unwinding`, color: '#2962FF' };
-    if (priceChange > 0 && oiChange > 0) return { text: `${side} Long`, color: '#00C853' };
-    if (priceChange < 0 && oiChange < 0) return { text: `${side} Long Unwind`, color: '#FF6D00' };
+    if (priceChange < 0 && oiChange > 0) return { text: `${side} Writing`, color: theme.colors.bearish };
+    if (priceChange > 0 && oiChange < 0) return { text: `${side} Unwinding`, color: theme.colors.primary };
+    if (priceChange > 0 && oiChange > 0) return { text: `${side} Long`, color: theme.colors.bullish };
+    if (priceChange < 0 && oiChange < 0) return { text: `${side} Long Unwind`, color: theme.colors.warning };
     return null;
   };
 
@@ -63,9 +63,16 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
 
       {/* Divergence Warning Banner */}
       {(bearishDivergence || bullishDivergence) && (
-        <View style={[styles.warningBanner, { backgroundColor: bearishDivergence ? '#FFEBEE' : '#E8F5E9', borderColor: bearishDivergence ? '#D50000' : '#00C853' }]}>
-          <Text style={[styles.warningText, { color: bearishDivergence ? '#D50000' : '#00C853' }]}>
-            {bearishDivergence ? '⚠️ BEARISH PCR DIVERGENCE: Trap Risk' : '⚠️ BULLISH PCR DIVERGENCE: Trap Risk'}
+        <View style={[
+          styles.warningBanner, 
+          { 
+            backgroundColor: bearishDivergence ? theme.colors.bearishBg || 'rgba(239,83,80,0.1)' : theme.colors.bullishBg || 'rgba(38,166,154,0.1)', 
+            borderColor: bearishDivergence ? theme.colors.bearish : theme.colors.bullish 
+          }
+        ]}>
+          <Ionicons name="warning" size={20} color={bearishDivergence ? theme.colors.bearish : theme.colors.bullish} style={{ marginRight: 8 }} />
+          <Text style={[styles.warningText, { color: bearishDivergence ? theme.colors.bearish : theme.colors.bullish }]}>
+            {bearishDivergence ? 'BEARISH PCR DIVERGENCE: Trap Risk' : 'BULLISH PCR DIVERGENCE: Trap Risk'}
           </Text>
         </View>
       )}
@@ -301,7 +308,7 @@ const getStyles = (theme) => StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 2,
   },
-  warningBanner: {
+  warningBanner: { flexDirection: 'row',
     padding: 12,
     borderRadius: 8,
     borderWidth: 1,

@@ -21,6 +21,7 @@ import { ServerSettingsModal } from '../components/ServerSettingsModal';
 import { useTheme } from '../context/ThemeContext';
 
 export const DashboardScreen = ({ onNavigate }) => {
+  const [activeDashTab, setActiveDashTab] = useState('F&O');
   const { theme } = useTheme();
   const styles = getStyles(theme);
   const { selectedIndex, marketData, advanceDecline, sectorStocks, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
@@ -70,9 +71,24 @@ export const DashboardScreen = ({ onNavigate }) => {
     return String(Math.round(num));
   };
 
-  const { bearishDivergence, bullishDivergence } = useMarket();
+  const sectorStats = React.useMemo(() => {
+    if (!sectorStocks) return { up: 0, down: 0, netMove: 0 };
+    let up = 0, down = 0, netMove = 0;
+    sectorStocks.forEach(s => {
+      if ((s.change_pct || 0) > 0) up++;
+      else if ((s.change_pct || 0) < 0) down++;
+      netMove += (s.change_pct || 0);
+    });
+    return { up, down, netMove: netMove / (sectorStocks.length || 1) };
+  }, [sectorStocks]);
+
   const renderSmartActionCard = () => {
-    if (bearishDivergence) return <View style={[styles.smartActionCard, { backgroundColor: theme.colors.bearishBg, borderColor: theme.colors.bearishBorder }]}><Ionicons name="warning" size={20} color={theme.colors.bearish} /><View style={styles.smartActionTextContainer}><Text style={[styles.smartActionTitle, { color: theme.colors.bearish }]}>BEARISH DIVERGENCE</Text><Text style={styles.smartActionDesc}>Spot price rising but Call OI is dominating. High Trap Risk.</Text></View></View>;
+    if (!signalAnalysis || !tradeGateAnalysis) return null;
+    const { bearishDivergence, bullishDivergence } = signalAnalysis;
+    const { zoneTone } = tradeGateAnalysis;
+    const tradeZone = marketData?.analytics?.tradeZone;
+
+    if (bearishDivergence) return <View style={[styles.smartActionCard, { backgroundColor: theme.colors.bearishBg, borderColor: theme.colors.bearishBorder }]}><Ionicons name="warning" size={20} color={theme.colors.bearish} /><View style={styles.smartActionTextContainer}><Text style={[styles.smartActionTitle, { color: theme.colors.bearish }]}>BEARISH DIVERGENCE</Text><Text style={styles.smartActionDesc}>Spot price rising but Call OI is dominating. Reversal likely.</Text></View></View>;
     if (bullishDivergence) return <View style={[styles.smartActionCard, { backgroundColor: theme.colors.bullishBg, borderColor: theme.colors.bullishBorder }]}><Ionicons name="warning" size={20} color={theme.colors.bullish} /><View style={styles.smartActionTextContainer}><Text style={[styles.smartActionTitle, { color: theme.colors.bullish }]}>BULLISH DIVERGENCE</Text><Text style={styles.smartActionDesc}>Spot price falling but Put OI is dominating. Reversal likely.</Text></View></View>;
     if (zoneTone === "trap" && tradeZone?.zone === 'Trap Zone') return <View style={[styles.smartActionCard, { backgroundColor: theme.colors.warning + "20", borderColor: theme.colors.warning }]}><Ionicons name="alert-circle" size={20} color={theme.colors.warning} /><View style={styles.smartActionTextContainer}><Text style={[styles.smartActionTitle, { color: theme.colors.warning }]}>TRAP ZONE DETECTED</Text><Text style={styles.smartActionDesc}>Do not trade. Wait for clean volume breakout.</Text></View></View>;
     return null;
@@ -80,17 +96,28 @@ export const DashboardScreen = ({ onNavigate }) => {
 
   return (
     <View style={styles.container}>
-      {/* Kotak Segmented Tabs (Fixed at top) */}
+      {/* Smart Top Segmented Tabs (Kotak Style) */}
       <View style={styles.segmentedTabsContainer}>
-        <TouchableOpacity style={styles.segmentedTab}>
-          <Text style={styles.segmentedTabText}>Stocks</Text>
+        <TouchableOpacity 
+          style={[styles.segmentedTab, activeDashTab === 'Stocks' && styles.segmentedTabActive]}
+          onPress={() => setActiveDashTab('Stocks')}
+        >
+          <Text style={[styles.segmentedTabText, activeDashTab === 'Stocks' && styles.segmentedTabTextActive]}>Stocks</Text>
+          {activeDashTab === 'Stocks' && <View style={styles.segmentedTabActiveIndicator} />}
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.segmentedTab, styles.segmentedTabActive]}>
-          <Text style={[styles.segmentedTabText, styles.segmentedTabTextActive]}>F&O</Text>
-          <View style={styles.segmentedTabActiveIndicator} />
+        <TouchableOpacity 
+          style={[styles.segmentedTab, activeDashTab === 'F&O' && styles.segmentedTabActive]}
+          onPress={() => setActiveDashTab('F&O')}
+        >
+          <Text style={[styles.segmentedTabText, activeDashTab === 'F&O' && styles.segmentedTabTextActive]}>F&O</Text>
+          {activeDashTab === 'F&O' && <View style={styles.segmentedTabActiveIndicator} />}
         </TouchableOpacity>
-        <TouchableOpacity style={styles.segmentedTab}>
-          <Text style={styles.segmentedTabText}>Mutual Funds</Text>
+        <TouchableOpacity 
+          style={[styles.segmentedTab, activeDashTab === 'Sectors' && styles.segmentedTabActive]}
+          onPress={() => setActiveDashTab('Sectors')}
+        >
+          <Text style={[styles.segmentedTabText, activeDashTab === 'Sectors' && styles.segmentedTabTextActive]}>Sectors</Text>
+          {activeDashTab === 'Sectors' && <View style={styles.segmentedTabActiveIndicator} />}
         </TouchableOpacity>
       </View>
 
@@ -234,142 +261,170 @@ export const DashboardScreen = ({ onNavigate }) => {
           </TouchableOpacity>
         ) : null}
 
-        {moveConfirmation ? (
-          <View style={styles.confirmCard}>
-            <View style={styles.confirmTopRow}>
-              <View>
-                <Text style={styles.confirmLabel}>MOVE CONFIRMATION</Text>
-                <Text
-                  style={[
-                    styles.confirmTitle,
-                    moveConfirmation.side === 'CE'
-                      ? { color: theme.colors.bullish }
-                      : moveConfirmation.side === 'PE'
-                        ? { color: theme.colors.bearish }
-                        : { color: theme.colors.warning },
-                  ]}
-                >
-                  {moveConfirmation.verdict}
-                </Text>
+        {/* --- TAB 1: STOCKS (Broader Market) --- */}
+        {activeDashTab === 'Stocks' && (
+          <>
+            {/* Market Mood Banner */}
+            <View style={styles.moodBanner}>
+              <Text style={styles.moodTitle}>Market Mood ({selectedIndex})</Text>
+              <View style={styles.moodBarContainer}>
+                <View style={[styles.moodBarFill, { backgroundColor: theme.colors.bullish, flex: mood.advances }]} />
+                <View style={[styles.moodBarFill, { backgroundColor: theme.colors.bearish, flex: mood.declines }]} />
               </View>
-              <Text style={styles.confirmScore}>{moveConfirmation.score}/{moveConfirmation.total}</Text>
+              <View style={styles.moodLabels}>
+                <Text style={[styles.moodLabelText, { color: theme.colors.bullish }]}>{mood.advances} Advances</Text>
+                <Text style={[styles.moodLabelText, { color: theme.colors.bearish }]}>{mood.declines} Declines</Text>
+              </View>
             </View>
-            <Text style={styles.confirmReason}>{moveConfirmation.reason}</Text>
-            <View style={styles.confirmGrid}>
-              {[
-                ['EMA', moveConfirmation.ema?.label, moveConfirmation.ema?.side],
-                ['VWAP', moveConfirmation.vwap?.label, moveConfirmation.vwap?.side],
-                ['Premium', moveConfirmation.premium?.label, moveConfirmation.premium?.side],
-                ['Volume', moveConfirmation.volume?.label, moveConfirmation.volume?.status],
-                ['Wall', moveConfirmation.wall?.label, moveConfirmation.wall?.side],
-                ['PCR', moveConfirmation.pcr?.label, moveConfirmation.pcr?.side],
-              ].map(([label, value, tone]) => {
-                const isCe = tone === 'CE' || tone === 'Strong';
-                const isPe = tone === 'PE';
-                return (
-                  <View
-                    key={label}
-                    style={[
-                      styles.confirmChip,
-                      isCe ? styles.confirmChipBull : isPe ? styles.confirmChipBear : styles.confirmChipWait,
-                    ]}
-                  >
-                    <Text style={styles.confirmChipLabel}>{label}</Text>
-                    <Text style={styles.confirmChipValue} numberOfLines={1}>{value || '-'}</Text>
+
+            {/* Quick Actions (Dashboard Tools) */}
+            <View style={styles.quickActionsRow}>
+              <TouchableOpacity style={styles.quickActionBtn} onPress={() => onNavigate && onNavigate('PCR')}>
+                <Ionicons name="bar-chart" size={18} color={theme.colors.primary} />
+                <Text style={styles.quickActionTitle}>PCR 5m/15m</Text>
+                <Text style={styles.quickActionSub}>Trend Data</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.quickActionBtn} onPress={() => onNavigate && onNavigate('SignalJournal')}>
+                <Ionicons name="journal" size={18} color={theme.colors.warning} />
+                <Text style={styles.quickActionTitle}>Journal</Text>
+                <Text style={styles.quickActionSub}>Live Logs</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.quickActionBtn} onPress={() => onNavigate && onNavigate('Chain')}>
+                <Ionicons name="layers" size={18} color="#a855f7" />
+                <Text style={styles.quickActionTitle}>Chain</Text>
+                <Text style={styles.quickActionSub}>Strikes</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+
+        {/* --- TAB 2: F&O (Options Data & Signals) --- */}
+        {activeDashTab === 'F&O' && (
+          <>
+            <VitalSignsHUD marketData={marketData} />
+            
+            {/* Trade Alerts */}
+            {renderSmartActionCard()}
+            {moveConfirmation ? (
+              <View style={styles.confirmCard}>
+                <View style={styles.confirmTopRow}>
+                  <View>
+                    <Text style={styles.confirmLabel}>MOVE CONFIRMATION</Text>
+                    <Text style={[styles.confirmTitle, moveConfirmation.side === 'CE' ? { color: theme.colors.bullish } : moveConfirmation.side === 'PE' ? { color: theme.colors.bearish } : { color: theme.colors.warning }]}>{moveConfirmation.verdict}</Text>
                   </View>
-                );
-              })}
-            </View>
-          </View>
-        ) : null}
-
-        {/* KPI Spotlight */}
-        <KpiCard data={marketData} atm={atm} />
-
-        {/* Quick Feature Action Badges */}
-        <View style={styles.quickActionsRow}>
-          <TouchableOpacity
-            style={styles.quickActionCard}
-            onPress={() => onNavigate && onNavigate('PCR')}
-          >
-            <Ionicons name="bar-chart" size={18} color={theme.colors.primary} />
-            <Text style={styles.quickActionTitle}>PCR 5m/15m</Text>
-            <Text style={styles.quickActionSub}>
-              {Number(marketData?.pcr_oi || 1).toFixed(2)} Ratio
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.quickActionCard}
-            onPress={() => onNavigate && onNavigate('Journal')}
-          >
-            <Ionicons name="journal" size={18} color={theme.colors.warning} />
-            <Text style={styles.quickActionTitle}>Journal</Text>
-            <Text style={styles.quickActionSub}>Live Logs</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.quickActionCard}
-            onPress={() => onNavigate && onNavigate('Chain')}
-          >
-            <Ionicons name="layers" size={18} color="#a855f7" />
-            <Text style={styles.quickActionTitle}>Chain</Text>
-            <Text style={styles.quickActionSub}>Strikes</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Live Signal Recommendation */}
-        <SignalCard signalAnalysis={signalAnalysis} indexSymbol={selectedIndex} />
-
-        {/* Market Gate Criteria Checklist */}
-        <MarketGateCard signalAnalysis={signalAnalysis} />
-
-        {/* Support and Resistance Quick Grid */}
-        <View style={styles.srGrid}>
-          {/* Support (PE OI) */}
-          <View style={[styles.srBox, styles.supportBox]}>
-            <View style={styles.srHeader}>
-              <Ionicons name="arrow-up-circle" size={16} color={theme.colors.bullish} />
-              <Text style={[styles.srTitle, { color: theme.colors.bullish }]}>TOP SUPPORT (PE OI)</Text>
-            </View>
-            {topSupport.slice(0, 3).map((item, idx) => (
-              <View key={idx} style={styles.srRow}>
-                <Text style={styles.srStrike}>₹{Number(item.strike).toLocaleString('en-IN')}</Text>
-                <Text style={styles.srOi}>{(Number(item.oi || 0) / 100000).toFixed(1)}L</Text>
-                <Text style={styles.srLtp}>₹{Number(item.ltp || 0).toFixed(1)}</Text>
+                  <Text style={styles.confirmScore}>{moveConfirmation.score}/{moveConfirmation.total}</Text>
+                </View>
+                <Text style={styles.confirmReason}>{moveConfirmation.reason}</Text>
+                <View style={styles.confirmGrid}>
+                  {[
+                    ['EMA', moveConfirmation.ema?.label, moveConfirmation.ema?.side],
+                    ['VWAP', moveConfirmation.vwap?.label, moveConfirmation.vwap?.side],
+                    ['Premium', moveConfirmation.premium?.label, moveConfirmation.premium?.side],
+                    ['Volume', moveConfirmation.volume?.label, moveConfirmation.volume?.status],
+                    ['Wall', moveConfirmation.wall?.label, moveConfirmation.wall?.side],
+                    ['PCR', moveConfirmation.pcr?.label, moveConfirmation.pcr?.side],
+                  ].map(([label, value, tone]) => (
+                    <View key={label} style={[styles.confirmChip, (tone === 'CE' || tone === 'Strong') ? styles.confirmChipBull : tone === 'PE' ? styles.confirmChipBear : styles.confirmChipWait]}>
+                      <Text style={styles.confirmChipLabel}>{label}</Text>
+                      <Text style={styles.confirmChipValue} numberOfLines={1}>{value || '-'}</Text>
+                    </View>
+                  ))}
+                </View>
               </View>
-            ))}
-            {!topSupport.length && <Text style={styles.emptyText}>No support data</Text>}
-          </View>
+            ) : null}
 
-          {/* Resistance (CE OI) */}
-          <View style={[styles.srBox, styles.resistanceBox]}>
-            <View style={styles.srHeader}>
-              <Ionicons name="arrow-down-circle" size={16} color={theme.colors.bearish} />
-              <Text style={[styles.srTitle, { color: theme.colors.bearish }]}>TOP RESISTANCE (CE OI)</Text>
+            <SignalCard signalAnalysis={signalAnalysis} indexSymbol={selectedIndex} />
+            <MarketGateCard signalAnalysis={signalAnalysis} />
+
+            {/* Clickable Detail Rooms (Progressive Disclosure) */}
+            <View style={styles.menuListContainer}>
+              <Text style={styles.sectionTitle}>Detailed Analytics</Text>
+
+              <TouchableOpacity style={styles.menuListItem} onPress={() => onNavigate && onNavigate('PCR')}>
+                <View style={styles.menuListLeft}>
+                  <Ionicons name="bar-chart" size={20} color={theme.colors.primary} />
+                  <View>
+                    <Text style={styles.menuListTitle}>PCR & Volatility</Text>
+                    <Text style={styles.menuListSub}>PCR: {Number(marketData?.pcr_oi || 1).toFixed(2)}</Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.menuListItem} onPress={() => onNavigate && onNavigate('Chain')}>
+                <View style={styles.menuListLeft}>
+                  <Ionicons name="swap-vertical" size={20} color={theme.colors.bullish} />
+                  <View>
+                    <Text style={styles.menuListTitle}>Support & Resistance</Text>
+                    <Text style={styles.menuListSub}>
+                      S: ₹{topSupport[0]?.strike || '-'} | R: ₹{topRes[0]?.strike || '-'}
+                    </Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.menuListItem} onPress={() => onNavigate && onNavigate('Chain')}>
+                <View style={styles.menuListLeft}>
+                  <Ionicons name="layers" size={20} color="#a855f7" />
+                  <View>
+                    <Text style={styles.menuListTitle}>Full Option Chain</Text>
+                    <Text style={styles.menuListSub}>OI Bar Charts & Greeks</Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+              
+              <TouchableOpacity style={styles.menuListItem} onPress={() => onNavigate && onNavigate('OptionBuyer')}>
+                <View style={styles.menuListLeft}>
+                  <Ionicons name="rocket" size={20} color={theme.colors.warning} />
+                  <View>
+                    <Text style={styles.menuListTitle}>Advanced Analytics</Text>
+                    <Text style={styles.menuListSub}>Divergence & Institutional Flow</Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.colors.textMuted} />
+              </TouchableOpacity>
             </View>
-            {topRes.slice(0, 3).map((item, idx) => (
-              <View key={idx} style={styles.srRow}>
-                <Text style={styles.srStrike}>₹{Number(item.strike).toLocaleString('en-IN')}</Text>
-                <Text style={styles.srOi}>{(Number(item.oi || 0) / 100000).toFixed(1)}L</Text>
-                <Text style={styles.srLtp}>₹{Number(item.ltp || 0).toFixed(1)}</Text>
+          </>
+        )}
+
+        {/* --- TAB 3: SECTORS (Market Breadth) --- */}
+        {activeDashTab === 'Sectors' && (
+          <View style={{ marginTop: 10 }}>
+            <View style={styles.sectorCard}>
+              <Text style={styles.sectionTitle}>Sector Performance</Text>
+              <View style={styles.sectorKpis}>
+                <View style={[styles.sectorKpiBox, { borderColor: theme.colors.bullishBorder || theme.colors.bullish }]}>
+                  <Text style={styles.sectorKpiLabel}>Sectors Up</Text>
+                  <Text style={[styles.sectorKpiValue, { color: theme.colors.bullish }]}>{sectorStats.up}</Text>
+                </View>
+                <View style={[styles.sectorKpiBox, { borderColor: theme.colors.bearishBorder || theme.colors.bearish }]}>
+                  <Text style={styles.sectorKpiLabel}>Sectors Down</Text>
+                  <Text style={[styles.sectorKpiValue, { color: theme.colors.bearish }]}>{sectorStats.down}</Text>
+                </View>
+                <View style={styles.sectorKpiBox}>
+                  <Text style={styles.sectorKpiLabel}>Net Move</Text>
+                  <Text style={[styles.sectorKpiValue, { color: theme.colors.textPrimary }]}>{(sectorStats.netMove * 100).toFixed(2)}%</Text>
+                </View>
               </View>
-            ))}
-            {!topRes.length && <Text style={styles.emptyText}>No resistance data</Text>}
+            </View>
+            
+            {/* Show full sector list directly in the tab instead of a modal! */}
+            <View style={{ paddingHorizontal: 14, marginTop: 16 }}>
+              {marketData?.sectorData ? marketData.sectorData.map((sector, i) => (
+                <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight }}>
+                  <Text style={{ color: theme.colors.textPrimary, fontWeight: '700', fontSize: 13, flex: 1 }}>{sector.symbol}</Text>
+                  <Text style={{ color: (sector.change_pct || 0) > 0 ? theme.colors.bullish : theme.colors.bearish, fontWeight: '800', fontSize: 13 }}>
+                    {(sector.change_pct || 0) > 0 ? '+' : ''}{(sector.change_pct || 0).toFixed(2)}%
+                  </Text>
+                </View>
+              )) : (
+                <Text style={{ color: theme.colors.textMuted, textAlign: 'center', marginTop: 20 }}>No sector data available.</Text>
+              )}
+            </View>
           </View>
-        </View>
-
-        {/* Advanced Analytics */}
-        <AdvancedAnalyticsCard analytics={marketData?.analytics} marketData={marketData} />
-
-        {/* Open Interest Chart (Fast Native View) */}
-        <View style={styles.chartHeaderRow}>
-          <Text style={styles.sectionTitle}>OPEN INTEREST & PCR (LIVE)</Text>
-          <TouchableOpacity onPress={() => onNavigate && onNavigate('Chain')}>
-            <Text style={styles.seeAllLink}>Full Chain →</Text>
-          </TouchableOpacity>
-        </View>
-        <OiBarChart chain={marketData?.chain} atm={atm} />
+        )}
 
         <View style={{ height: 30 }} />
       </ScrollView>
@@ -848,9 +903,40 @@ const getStyles = (theme) => StyleSheet.create({
   },
   emptyText: {
     color: theme.colors.textMuted,
-    fontSize: 11,
-    paddingVertical: 6,
+    fontSize: 12,
+    fontStyle: 'italic',
     textAlign: 'center',
+    padding: 10,
+  },
+  menuListContainer: {
+    paddingHorizontal: 14,
+    marginTop: 16,
+    gap: 12,
+  },
+  menuListItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: theme.colors.bgCardSolid || '#191E28',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  menuListLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  menuListTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  menuListSub: {
+    color: theme.colors.textMuted,
+    fontSize: 12,
+    marginTop: 2,
   },
   chartHeaderRow: {
     flexDirection: 'row',

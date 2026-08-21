@@ -60,8 +60,8 @@ export const MarketTape = () => {
         {displayItems.map((item, idx) => {
           const isPos = (item.change ?? 0) >= 0;
           const isSelected = selectedIndex && (
-            item.label?.includes(selectedIndex) ||
-            item.symbol?.includes(selectedIndex)
+            item.label === selectedIndex ||
+            item.symbol === selectedIndex
           );
 
           return (
