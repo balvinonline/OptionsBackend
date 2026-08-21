@@ -150,6 +150,7 @@ export const MarketProvider = ({ children }) => {
   const [indexCandles, setIndexCandles] = useState([]);
   const [liveGreeks, setLiveGreeks] = useState({});
   const [whaleAlerts, setWhaleAlerts] = useState([]);
+  const [advanceDecline, setAdvanceDecline] = useState({});
   
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -685,6 +686,10 @@ export const MarketProvider = ({ children }) => {
         setMarketStrip(homeDash.value.marketStrip);
       }
 
+      if (homeDash.status === 'fulfilled' && homeDash.value?.advanceDecline) {
+        setAdvanceDecline(homeDash.value.advanceDecline);
+      }
+
       if (news.status === 'fulfilled' && news.value) {
         const newsItems = Array.isArray(news.value) ? news.value : (news.value.items || []);
         setMarketNews(newsItems);
@@ -727,9 +732,9 @@ export const MarketProvider = ({ children }) => {
           label: item.label || tick.label,
           short_name: item.short_name || tick.label,
           ltp: tick.ltp,
-          change: tick.change ?? item.change,
-          change_pct: tick.change_pct ?? item.change_pct,
-          change_p: tick.change_pct ?? item.change_p,
+          change: tick.change || item.change,
+          change_pct: tick.change_pct || item.change_pct,
+          change_p: tick.change_pct || item.change_p,
           updated_at: tick.updated_at,
           liveFeed: tick.liveFeed,
         };
@@ -758,9 +763,9 @@ export const MarketProvider = ({ children }) => {
         const updated = {
           ...base,
           spot: tick.ltp,
-          change: tick.change ?? base.change,
-          pChange: tick.change_pct ?? base.pChange,
-          pct_change: tick.change_pct ?? base.pct_change,
+          change: tick.change || base.change,
+          pChange: tick.change_pct || base.pChange,
+          pct_change: tick.change_pct || base.pct_change,
           liveFeed: tick.liveFeed,
           updated_at: tick.updated_at,
         };
@@ -1108,6 +1113,7 @@ export const MarketProvider = ({ children }) => {
         marketStrip,
         marketNews,
         sectorStocks,
+        advanceDecline,
         heavyweights,
         signalJournal,
         signalAnalysis,

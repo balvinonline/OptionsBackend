@@ -22,9 +22,12 @@ import { useTheme } from '../context/ThemeContext';
 export const DashboardScreen = ({ onNavigate }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
-  const { selectedIndex, marketData, sectorStocks, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
+  const { selectedIndex, marketData, advanceDecline, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
   const [showSettings, setShowSettings] = useState(false);
   const [showZonePopup, setShowZonePopup] = useState(false);
+
+  const adStats = advanceDecline?.[selectedIndex] || { advances: 0, declines: 0 };
+  const hasAdData = adStats.advances > 0 || adStats.declines > 0;
 
   const topSupport = marketData?.support || [];
   const topRes = marketData?.resistance || [];
@@ -70,16 +73,16 @@ export const DashboardScreen = ({ onNavigate }) => {
         }
       >
         {/* Market Mood Banner */}
-        {marketData?.breadthStats && (
+        {hasAdData && (
           <View style={styles.moodCard}>
-            <Text style={styles.moodTitle}>Market Mood (Nifty 50)</Text>
+            <Text style={styles.moodTitle}>Market Mood ({selectedIndex})</Text>
             <View style={styles.moodBarContainer}>
-              <View style={[styles.moodBarBullish, { flex: marketData.breadthStats.advances || 1 }]} />
-              <View style={[styles.moodBarBearish, { flex: marketData.breadthStats.declines || 1 }]} />
+              <View style={[styles.moodBarBullish, { flex: adStats.advances || 1 }]} />
+              <View style={[styles.moodBarBearish, { flex: adStats.declines || 1 }]} />
             </View>
             <View style={styles.moodLabels}>
-              <Text style={styles.moodAdvances}>{marketData.breadthStats.advances || 0} Advances</Text>
-              <Text style={styles.moodDeclines}>{marketData.breadthStats.declines || 0} Declines</Text>
+              <Text style={styles.moodAdvances}>{adStats.advances || 0} Advances</Text>
+              <Text style={styles.moodDeclines}>{adStats.declines || 0} Declines</Text>
             </View>
           </View>
         )}
