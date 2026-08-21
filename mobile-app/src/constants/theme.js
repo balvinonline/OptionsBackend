@@ -1,106 +1,121 @@
-// Dark Theme (Original)
+// Kotak Neo Dark Theme (Phase 7 Redesign)
 export const DARK_THEME = {
   colors: {
-    bgDark: "#071a26",
-    bgCard: "rgba(255, 255, 255, 0.05)",
-    bgCardSolid: "#0c2436",
-    bgCardElevated: "#123149",
-    border: "rgba(255, 255, 255, 0.12)",
-    borderLight: "rgba(255, 255, 255, 0.06)",
+    bgDark: "#0A0D14", // Pure institutional black
+    bgCard: "#191E28", // Flat grey-blue-black for cards
+    bgCardSolid: "#191E28",
+    bgCardElevated: "#232936",
+    border: "#232936",
+    borderLight: "#1D2330",
     
     // Accents
-    primary: "#38bdf8",      // Sky blue
-    primaryLight: "#7dd3fc",
-    primaryGlow: "rgba(56, 189, 248, 0.2)",
+    primary: "#00B8FF",      // Bright cyan blue
+    primaryLight: "#4DD1FF",
+    primaryGlow: "rgba(0, 184, 255, 0.15)",
     
     // Trading Indicators
-    bullish: "#10b981",      // Emerald Green
-    bullishBg: "rgba(16, 185, 129, 0.15)",
-    bullishBorder: "rgba(16, 185, 129, 0.3)",
+    bullish: "#05C076",      // Mint Green
+    bullishBg: "rgba(5, 192, 118, 0.1)",
+    bullishBorder: "rgba(5, 192, 118, 0.2)",
     
-    bearish: "#ef4444",      // Red
-    bearishBg: "rgba(239, 68, 68, 0.15)",
-    bearishBorder: "rgba(239, 68, 68, 0.3)",
+    bearish: "#FF3F4F",      // Bright Red
+    bearishBg: "rgba(255, 63, 79, 0.1)",
+    bearishBorder: "rgba(255, 63, 79, 0.2)",
     
-    warning: "#f59e0b",      // Amber
-    warningBg: "rgba(245, 158, 11, 0.15)",
+    warning: "#FF9900",      // Alert Orange
+    warningBg: "rgba(255, 153, 0, 0.1)",
     
     // Typography
-    textPrimary: "#f8fafc",
-    textSecondary: "#cbd5e1",
-    textMuted: "#64748b",
+    textPrimary: "#FFFFFF",
+    textSecondary: "#8891A5",
+    textMuted: "#5F6B84",
     
     // Gradients
-    gradBg: ["#071a26", "#040e14"],
-    gradCard: ["rgba(15, 39, 58, 0.9)", "rgba(9, 24, 38, 0.9)"],
+    gradBg: ["#0A0D14", "#0A0D14"],
+    gradCard: ["#191E28", "#191E28"],
   },
   
   shadows: {
     sm: {
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.3,
+      shadowOpacity: 0.15,
       shadowRadius: 3,
-      elevation: 3,
+      elevation: 2,
     },
     md: {
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.4,
+      shadowOpacity: 0.25,
       shadowRadius: 6,
-      elevation: 6,
+      elevation: 5,
     }
   },
   
   borderRadius: {
-    sm: 6,
-    md: 10,
-    lg: 16,
-    xl: 24,
+    sm: 4,
+    md: 8,
+    lg: 12,
+    xl: 16,
     pill: 999,
   }
 };
 
-// Light Theme
+// Kotak Neo Light Theme (Phase 7 Redesign)
 export const LIGHT_THEME = {
   colors: {
-    bgDark: "#f0f4f8",
-    bgCard: "rgba(255, 255, 255, 0.95)",
-    bgCardSolid: "#ffffff",
-    bgCardElevated: "#ffffff",
-    border: "rgba(0, 0, 0, 0.12)",
-    borderLight: "rgba(0, 0, 0, 0.06)",
+    bgDark: "#F2F4F7", // Very light grayish blue
+    bgCard: "#FFFFFF",
+    bgCardSolid: "#FFFFFF",
+    bgCardElevated: "#FFFFFF",
+    border: "#E4E7ED",
+    borderLight: "#F0F2F5",
     
     // Accents
-    primary: "#0284c7",      // Sky blue darker
-    primaryLight: "#38bdf8",
-    primaryGlow: "rgba(2, 132, 199, 0.2)",
+    primary: "#0050FF",      // Institutional Deep Blue
+    primaryLight: "#3375FF",
+    primaryGlow: "rgba(0, 80, 255, 0.1)",
     
     // Trading Indicators
-    bullish: "#059669",      // Emerald Green Darker
-    bullishBg: "rgba(16, 185, 129, 0.15)",
-    bullishBorder: "rgba(16, 185, 129, 0.3)",
+    bullish: "#00A95A",      // Forest green
+    bullishBg: "rgba(0, 169, 90, 0.1)",
+    bullishBorder: "rgba(0, 169, 90, 0.2)",
     
-    bearish: "#dc2626",      // Red Darker
-    bearishBg: "rgba(239, 68, 68, 0.15)",
-    bearishBorder: "rgba(239, 68, 68, 0.3)",
+    bearish: "#EB3F4C",      // Deep Red
+    bearishBg: "rgba(235, 63, 76, 0.1)",
+    bearishBorder: "rgba(235, 63, 76, 0.2)",
     
-    warning: "#d97706",      // Amber Darker
-    warningBg: "rgba(245, 158, 11, 0.15)",
+    warning: "#E67E22",      // Alert Orange
+    warningBg: "rgba(230, 126, 34, 0.1)",
     
     // Typography
-    textPrimary: "#0f172a",
-    textSecondary: "#334155",
-    textMuted: "#64748b",
+    textPrimary: "#141721",
+    textSecondary: "#5F6B84",
+    textMuted: "#8891A5",
     
     // Gradients
-    gradBg: ["#f8fafc", "#e2e8f0"],
-    gradCard: ["#ffffff", "#f8fafc"],
+    gradBg: ["#F2F4F7", "#F2F4F7"],
+    gradCard: ["#FFFFFF", "#FFFFFF"],
   },
   
-  shadows: DARK_THEME.shadows, // Re-use shadows
+  shadows: {
+    sm: {
+      shadowColor: "#141721",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.05,
+      shadowRadius: 2,
+      elevation: 1,
+    },
+    md: {
+      shadowColor: "#141721",
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.08,
+      shadowRadius: 5,
+      elevation: 3,
+    }
+  },
   borderRadius: DARK_THEME.borderRadius
 };
 
-// Fallback for non-refactored components (points to DARK by default)
+// Fallback for non-refactored components
 export const THEME = DARK_THEME;
