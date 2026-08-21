@@ -17,18 +17,24 @@ export const ExpiryScalperScreen = () => {
   // Filter for Zero-to-Hero candidates (Premiums < 40, High Volume/OI ratio)
   const candidates = [];
   chain.forEach(row => {
+    const ceLtp = Number(row.ce_ltp || 0);
+    const ceVol = Number(row.ce_volume || 0);
+    const ceOi = Number(row.ce_oi || 1);
+    const ceChg = Number(row.ce_ch || 0);
+    const ceOiCh = Number(row.ce_oich || 0);
+    
     // Call Side Analysis
-    if (row.ce_ltp > 0 && row.ce_ltp <= 40) {
-      const volOiRatio = (row.ce_volume || 0) / (row.ce_oi || 1);
-      if (volOiRatio > 2 || (row.ce_ch > 0 && row.ce_oich > 0)) {
+    if (ceLtp > 0 && ceLtp <= 40) {
+      const volOiRatio = ceVol / ceOi;
+      if (volOiRatio > 2 || (ceChg > 0 && ceOiCh > 0)) {
         candidates.push({
           type: 'CE',
           strike: row.strike,
           symbol: row.ce_symbol || row.symbol_CE,
-          ltp: row.ce_ltp,
-          chg: row.ce_ch,
-          vol: row.ce_volume,
-          oi: row.ce_oi,
+          ltp: ceLtp,
+          chg: ceChg,
+          vol: ceVol,
+          oi: ceOi,
           ratio: volOiRatio,
           color: theme.colors.bullish,
           icon: 'trending-up'
@@ -36,18 +42,24 @@ export const ExpiryScalperScreen = () => {
       }
     }
     
+    const peLtp = Number(row.pe_ltp || 0);
+    const peVol = Number(row.pe_volume || 0);
+    const peOi = Number(row.pe_oi || 1);
+    const peChg = Number(row.pe_ch || 0);
+    const peOiCh = Number(row.pe_oich || 0);
+
     // Put Side Analysis
-    if (row.pe_ltp > 0 && row.pe_ltp <= 40) {
-      const volOiRatio = (row.pe_volume || 0) / (row.pe_oi || 1);
-      if (volOiRatio > 2 || (row.pe_ch > 0 && row.pe_oich > 0)) {
+    if (peLtp > 0 && peLtp <= 40) {
+      const volOiRatio = peVol / peOi;
+      if (volOiRatio > 2 || (peChg > 0 && peOiCh > 0)) {
         candidates.push({
           type: 'PE',
           strike: row.strike,
           symbol: row.pe_symbol || row.symbol_PE,
-          ltp: row.pe_ltp,
-          chg: row.pe_ch,
-          vol: row.pe_volume,
-          oi: row.pe_oi,
+          ltp: peLtp,
+          chg: peChg,
+          vol: peVol,
+          oi: peOi,
           ratio: volOiRatio,
           color: theme.colors.bearish,
           icon: 'trending-down'

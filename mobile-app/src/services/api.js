@@ -102,8 +102,13 @@ export const api = {
     return res.data;
   },
 
-  getSectorStocks: async () => {
-    const res = await apiClient.get('/api/sector-stocks');
+  getHomeDashboard: async () => {
+    const res = await apiClient.get('/api/home-dashboard');
+    return res.data;
+  },
+
+  getSectorStocks: async (sector = '') => {
+    const res = await apiClient.get(`/api/sector-stocks?sector=${encodeURIComponent(sector)}`);
     return res.data;
   },
 

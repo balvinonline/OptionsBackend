@@ -698,15 +698,16 @@ export const MarketProvider = ({ children }) => {
       if (homeDash.status === 'fulfilled' && homeDash.value?.advanceDecline) {
         setAdvanceDecline(homeDash.value.advanceDecline);
       }
+      
+      if (homeDash.status === 'fulfilled' && homeDash.value?.sectorStrength) {
+        setSectorStocks(homeDash.value.sectorStrength);
+      }
 
       if (news.status === 'fulfilled' && news.value) {
         const newsItems = Array.isArray(news.value) ? news.value : (news.value.items || []);
         setMarketNews(newsItems);
       }
-      if (sectors.status === 'fulfilled' && sectors.value) {
-        const secRows = Array.isArray(sectors.value) ? sectors.value : (sectors.value.rows || []);
-        setSectorStocks(secRows);
-      }
+      
       if (scans.status === 'fulfilled' && scans.value) {
         const scanRows = Array.isArray(scans.value) ? scans.value : (scans.value.rows || []);
         setHeavyweights(scanRows);

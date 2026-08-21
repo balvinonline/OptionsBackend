@@ -351,7 +351,7 @@ const getStyles = (theme) => StyleSheet.create({
     letterSpacing: 0.5,
   },
   chainContainer: {
-    backgroundColor: theme.colors.surfaceLight,
+    backgroundColor: theme.colors.bgCardSolid,
     borderRadius: 8,
     padding: 10,
     marginBottom: 20,

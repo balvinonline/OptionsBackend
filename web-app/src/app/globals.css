@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+:root {
+  --bg-dark: #071a26;
+  --bg-card: rgba(255, 255, 255, 0.05);
+  --bg-card-solid: #0c2436;
+  --bg-card-elevated: #123149;
+  
+  --border: rgba(255, 255, 255, 0.12);
+  --border-light: rgba(255, 255, 255, 0.06);
+
+  --primary: #38bdf8;
+  --primary-light: #7dd3fc;
+  
+  --bullish: #10b981;
+  --bullish-bg: rgba(16, 185, 129, 0.15);
+  --bullish-border: rgba(16, 185, 129, 0.3);
+  
+  --bearish: #ef4444;
+  --bearish-bg: rgba(239, 68, 68, 0.15);
+  --bearish-border: rgba(239, 68, 68, 0.3);
+  
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.15);
+  
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #64748b;
+}
+
+@theme {
+  --color-bg-dark: var(--bg-dark);
+  --color-bg-card: var(--bg-card);
+  --color-bg-card-solid: var(--bg-card-solid);
+  --color-bg-card-elevated: var(--bg-card-elevated);
+  --color-border: var(--border);
+  --color-border-light: var(--border-light);
+  --color-primary: var(--primary);
+  --color-primary-light: var(--primary-light);
+  --color-bullish: var(--bullish);
+  --color-bullish-bg: var(--bullish-bg);
+  --color-bullish-border: var(--bullish-border);
+  --color-bearish: var(--bearish);
+  --color-bearish-bg: var(--bearish-bg);
+  --color-bearish-border: var(--bearish-border);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+}
+
+body {
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+}
+body { zoom: 0.85; }
+body { font-variant-numeric: tabular-nums; }

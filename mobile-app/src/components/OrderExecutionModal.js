@@ -153,7 +153,7 @@ const getStyles = (theme) => StyleSheet.create({
     color: theme.colors.textPrimary,
   },
   detailsBox: {
-    backgroundColor: theme.colors.background,
+    backgroundColor: theme.colors.bgDark,
     padding: 16,
     borderRadius: 8,
     marginBottom: 20,
@@ -182,7 +182,7 @@ const getStyles = (theme) => StyleSheet.create({
     marginRight: 10,
   },
   input: {
-    backgroundColor: theme.colors.background,
+    backgroundColor: theme.colors.bgDark,
     color: theme.colors.textPrimary,
     fontSize: 18,
     fontWeight: 'bold',

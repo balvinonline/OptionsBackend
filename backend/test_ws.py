@@ -8,7 +8,9 @@ server.refresh_fyers_from_env()
 
 from fyers_apiv3.FyersWebsocket import data_ws
 
-access_token = f"{server.APP_ID}:{server.ACCESS_TOKEN}"
+access_token = f"{server.FYERS_CLIENT_ID}:{server.FYERS_ACCESS_TOKEN}"
+print(f"Token length: {len(access_token)}")
+print("Connecting Fyers Websocket...")
 
 def onmessage(message):
     print("WS Message:", message)

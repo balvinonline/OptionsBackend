@@ -81,7 +81,7 @@ export const PcrAnalyticsScreen = ({ onNavigate }) => {
               let vwapShort = vwapSig;
               if (vwapSig.includes('ABOVE')) vwapShort = 'ABOVE';
               else if (vwapSig.includes('BELOW')) vwapShort = 'BELOW';
-              const vwapColor = vwapShort === 'ABOVE' ? theme.colors.success : vwapShort === 'BELOW' ? theme.colors.danger : theme.colors.textMuted;
+              const vwapColor = vwapShort === 'ABOVE' ? theme.colors.bullish : vwapShort === 'BELOW' ? theme.colors.bearish : theme.colors.textMuted;
               
               return (
                 <View key={idx} style={styles.tableRow}>

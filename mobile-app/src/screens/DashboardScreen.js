@@ -25,6 +25,24 @@ export const DashboardScreen = ({ onNavigate }) => {
   const { selectedIndex, marketData, advanceDecline, sectorStocks, signalAnalysis, tradeGateAnalysis, moveConfirmation, atm, isRefreshing, refresh, error } = useMarket();
   const [showSettings, setShowSettings] = useState(false);
   const [showZonePopup, setShowZonePopup] = useState(false);
+  const [sectorModalVisible, setSectorModalVisible] = useState(false);
+  const [selectedSectorDetails, setSelectedSectorDetails] = useState(null);
+  const [loadingSector, setLoadingSector] = useState(false);
+
+  const fetchSectorDetails = async (sectorName) => {
+    setSectorModalVisible(true);
+    setLoadingSector(true);
+    try {
+      // Lazy import api if needed, or import at top
+      const { api } = require('../services/api');
+      const res = await api.getSectorStocks(sectorName);
+      setSelectedSectorDetails(res);
+    } catch (err) {
+      console.log('Error fetching sector details', err);
+    } finally {
+      setLoadingSector(false);
+    }
+  };
 
   const adStats = advanceDecline?.[selectedIndex] || { advances: 0, declines: 0 };
   const hasAdData = adStats.advances > 0 || adStats.declines > 0;
@@ -136,7 +154,7 @@ export const DashboardScreen = ({ onNavigate }) => {
                 const barWidth = Math.min(Math.abs(s.change_pct) * 20, 100); // Scale pct to width
                 
                 return (
-                  <View key={idx} style={styles.sectorRow}>
+                  <TouchableOpacity key={idx} style={styles.sectorRow} onPress={() => fetchSectorDetails(s.name)}>
                     <Text style={styles.sectorName} numberOfLines={1}>{s.name}</Text>
                     
                     <View style={styles.divergingTrack}>
@@ -161,7 +179,7 @@ export const DashboardScreen = ({ onNavigate }) => {
                     <Text style={[styles.sectorPct, { color: isBull ? theme.colors.bullish : theme.colors.bearish }]}>
                       {s.change_pct > 0 ? '+' : ''}{s.change_pct?.toFixed(2)}%
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
           </View>
@@ -332,11 +350,10 @@ export const DashboardScreen = ({ onNavigate }) => {
         <View style={{ height: 30 }} />
       </ScrollView>
 
-      <ServerSettingsModal visible={showSettings} onClose={() => setShowSettings(false)} />
-
-      <Modal visible={showZonePopup} transparent animationType="fade" onRequestClose={() => setShowZonePopup(false)}>
+      {/* Zone Popup Modal */}
+      <Modal visible={showZonePopup} transparent animationType="fade">
         <View style={styles.zoneModalOverlay}>
-          <View style={styles.zoneModal}>
+          <View style={[styles.zoneModalContent, { borderColor: tradeZone?.zone === 'Trap Zone' ? theme.colors.warning : theme.colors.bullish }]}>
             <View style={styles.zoneModalHead}>
               <Text style={styles.zoneModalTitle}>{tradeZone?.zone || 'Trade Zone'}</Text>
               <TouchableOpacity style={styles.zoneCloseBtn} onPress={() => setShowZonePopup(false)}>
@@ -349,7 +366,7 @@ export const DashboardScreen = ({ onNavigate }) => {
             <View style={styles.zoneDetailGrid}>
               <View style={styles.zoneDetailBox}>
                 <Text style={styles.zoneDetailLabel}>Side</Text>
-                <Text style={[styles.zoneDetailValue, { color: zoneColor }]}>{tradeZone?.side || 'WAIT'}</Text>
+                <Text style={[styles.zoneDetailValue, { color: theme.colors.textPrimary }]}>{tradeZone?.side || 'WAIT'}</Text>
               </View>
               <View style={styles.zoneDetailBox}>
                 <Text style={styles.zoneDetailLabel}>Price</Text>
@@ -385,6 +402,41 @@ export const DashboardScreen = ({ onNavigate }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Sector Details Modal */}
+      <Modal visible={sectorModalVisible} transparent animationType="slide" onRequestClose={() => setSectorModalVisible(false)}>
+        <View style={styles.zoneModalOverlay}>
+          <View style={[styles.zoneModalContent, { flex: 0.8, backgroundColor: theme.colors.bgDark }]}>
+            <View style={styles.zoneModalHead}>
+              <Text style={styles.zoneModalTitle}>Sector Details</Text>
+              <TouchableOpacity style={styles.zoneCloseBtn} onPress={() => setSectorModalVisible(false)}>
+                <Text style={styles.zoneCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            {loadingSector ? (
+              <Text style={{color: theme.colors.textMuted, textAlign: 'center', marginTop: 20}}>Loading...</Text>
+            ) : selectedSectorDetails ? (
+              <ScrollView style={{marginTop: 10}}>
+                <Text style={{color: theme.colors.textPrimary, fontSize: 18, fontWeight: 'bold', marginBottom: 12}}>
+                  {selectedSectorDetails.sector}
+                </Text>
+                {(selectedSectorDetails.rows || []).map((stock, i) => (
+                  <View key={i} style={{flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight}}>
+                    <Text style={{color: theme.colors.textPrimary, fontWeight: 'bold', flex: 1}}>{stock.symbol}</Text>
+                    <Text style={{color: (stock.change_pct || 0) > 0 ? theme.colors.bullish : theme.colors.bearish, fontWeight: 'bold'}}>
+                      {(stock.change_pct || 0) > 0 ? '+' : ''}{Number(stock.change_pct || 0).toFixed(2)}%
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <Text style={{color: theme.colors.textMuted, textAlign: 'center', marginTop: 20}}>No data available.</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 };
