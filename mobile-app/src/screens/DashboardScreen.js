@@ -70,16 +70,16 @@ export const DashboardScreen = ({ onNavigate }) => {
         }
       >
         {/* Market Mood Banner */}
-        {sectorStocks && (
+        {marketData?.breadthStats && (
           <View style={styles.moodCard}>
             <Text style={styles.moodTitle}>Market Mood (Nifty 50)</Text>
             <View style={styles.moodBarContainer}>
-              <View style={[styles.moodBarBullish, { flex: sectorStocks.advances || 1 }]} />
-              <View style={[styles.moodBarBearish, { flex: sectorStocks.declines || 1 }]} />
+              <View style={[styles.moodBarBullish, { flex: marketData.breadthStats.advances || 1 }]} />
+              <View style={[styles.moodBarBearish, { flex: marketData.breadthStats.declines || 1 }]} />
             </View>
             <View style={styles.moodLabels}>
-              <Text style={styles.moodAdvances}>{sectorStocks.advances} Advances</Text>
-              <Text style={styles.moodDeclines}>{sectorStocks.declines} Declines</Text>
+              <Text style={styles.moodAdvances}>{marketData.breadthStats.advances || 0} Advances</Text>
+              <Text style={styles.moodDeclines}>{marketData.breadthStats.declines || 0} Declines</Text>
             </View>
           </View>
         )}
