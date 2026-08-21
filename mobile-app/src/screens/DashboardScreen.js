@@ -132,10 +132,15 @@ export const DashboardScreen = ({ onNavigate }) => {
           />
         }
       >
-        <IndexHeader onOpenSettings={() => setShowSettings(true)} />
-        <VitalSignsHUD marketData={marketData} />
+        {/* --- TAB: MARKET STATS --- */}
+        {activeDashTab === 'Market Stats' && (
+          <View style={{ paddingTop: 10 }}>
+            <IndexHeader onOpenSettings={() => setShowSettings(true)} />
+            <VitalSignsHUD marketData={marketData} />
+          </View>
+        )}
 
-        {/* --- TAB 1: STOCKS (Broader Market) --- */}
+        {/* --- TAB: STOCKS --- */}
         {activeDashTab === 'Stocks' && (
           <View>
             {renderSmartActionCard()}
@@ -258,6 +263,54 @@ export const DashboardScreen = ({ onNavigate }) => {
               </TouchableOpacity>
             </View>
           
+          </View>
+        )}
+
+        {/* --- TAB: SECTOR PERFORMANCE --- */}
+        {activeDashTab === 'Sector Performance' && (
+          <View style={{ paddingTop: 10 }}>
+            {sectorStocks && sectorStocks.length > 0 ? (
+              <View style={[styles.menuListContainer, { marginHorizontal: 12, backgroundColor: 'transparent', borderWidth: 0 }]}>
+                <View style={styles.sectorStatsCard}>
+                  <View style={styles.sectorStatBox}>
+                    <Text style={styles.sectorStatLabel}>Sectors Up</Text>
+                    <Text style={[styles.sectorStatValue, { color: theme.colors.bullish }]}>{sectorStats.up}</Text>
+                  </View>
+                  <View style={styles.sectorStatBox}>
+                    <Text style={styles.sectorStatLabel}>Sectors Down</Text>
+                    <Text style={[styles.sectorStatValue, { color: theme.colors.bearish }]}>{sectorStats.down}</Text>
+                  </View>
+                  <View style={[styles.sectorStatBox, { borderRightWidth: 0 }]}>
+                    <Text style={styles.sectorStatLabel}>Net Move</Text>
+                    <Text style={[styles.sectorStatValue, { color: theme.colors.textPrimary }]}>
+                      {sectorStats.netMove > 0 ? '+' : ''}{sectorStats.netMove.toFixed(2)}%
+                    </Text>
+                  </View>
+                </View>
+                
+                {sectorStocks.map((sector, idx) => (
+                  <TouchableOpacity key={idx} style={styles.sectorRow} onPress={() => fetchSectorDetails(sector.symbol)}>
+                    <Text style={styles.sectorName}>{sector.symbol.replace('NIFTY ', '')}</Text>
+                    <View style={styles.sectorBarWrapper}>
+                      <View style={[
+                        styles.sectorBar, 
+                        { 
+                          width: `${Math.min(Math.abs(sector.change_pct) * 10, 100)}%`,
+                          backgroundColor: sector.change_pct >= 0 ? theme.colors.bullish : theme.colors.bearish
+                        }
+                      ]} />
+                    </View>
+                    <Text style={[styles.sectorChange, { color: sector.change_pct >= 0 ? theme.colors.bullish : theme.colors.bearish }]}>
+                      {sector.change_pct >= 0 ? '+' : ''}{sector.change_pct}%
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <View style={{ padding: 20, alignItems: 'center' }}>
+                <Text style={{ color: theme.colors.textMuted }}>No sector data available</Text>
+              </View>
+            )}
           </View>
         )}
 
