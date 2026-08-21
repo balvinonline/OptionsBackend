@@ -13,37 +13,7 @@ export const IndexHeader = ({ onOpenSettings }) => {
 
   return (
     <View style={styles.container}>
-      {/* Top status bar row */}
-      <View style={styles.topRow}>
-        <View style={styles.branding}>
-          <Ionicons name="stats-chart" size={18} color={theme.colors.primary} />
-          <Text style={styles.brandTitle}>OPTIONS DESK</Text>
-          <Text style={styles.buildText}>{APP_BUILD_LABEL}</Text>
-        </View>
-
-        <View style={styles.statusGroup}>
-          <View style={styles.connectionBadge}>
-            <View style={[styles.dot, { backgroundColor: isConnected ? theme.colors.bullish : theme.colors.bearish }]} />
-            <Text style={styles.statusText}>{isConnected ? 'LIVE' : 'OFFLINE'}</Text>
-          </View>
-
-          {lastUpdated ? (
-            <Text style={styles.timeText}>{lastUpdated}</Text>
-          ) : null}
-
-          <TouchableOpacity onPress={refresh} style={styles.iconBtn} disabled={isRefreshing}>
-            <Ionicons name="refresh" size={16} color={isRefreshing ? theme.colors.primary : theme.colors.textSecondary} />
-          </TouchableOpacity>
-
-          {onOpenSettings ? (
-            <TouchableOpacity onPress={onOpenSettings} style={styles.iconBtn}>
-              <Ionicons name="settings-outline" size={16} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      </View>
-
-      {/* Market Tape Spot Tickers (NIFTY 50, NIFTY BANK, SENSEX, SMALLCAP, FIN SERVICE, MIDCAP) */}
+      {/* Market Tape Spot Tickers */}
       <MarketTape />
 
       {/* Index Selector Pills */}
@@ -55,7 +25,6 @@ export const IndexHeader = ({ onOpenSettings }) => {
               key={idx}
               style={[styles.pill, isActive && styles.pillActive]}
               onPress={() => {
-                // In a heavy app, deferring the global state update prevents button press lag
                 requestAnimationFrame(() => {
                   setTimeout(() => {
                     setSelectedIndex(idx);

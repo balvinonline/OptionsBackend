@@ -157,7 +157,7 @@ const getStyles = (theme) => StyleSheet.create({
     backgroundColor: theme.colors.bgDark,
   },
   atmRow: {
-    backgroundColor: 'rgba(56, 189, 248, 0.08)',
+    backgroundColor: theme.colors.primaryGlow,
     borderTopWidth: 1,
     borderBottomWidth: 1,
     borderColor: theme.colors.primary,
@@ -173,7 +173,7 @@ const getStyles = (theme) => StyleSheet.create({
     left: 0,
     top: 2,
     bottom: 2,
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    backgroundColor: theme.colors.bearishBg,
     borderRadius: 2,
   },
   peOiBar: {
@@ -181,7 +181,7 @@ const getStyles = (theme) => StyleSheet.create({
     right: 0,
     top: 2,
     bottom: 2,
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    backgroundColor: theme.colors.bullishBg,
     borderRadius: 2,
   },
   cellContent: {
