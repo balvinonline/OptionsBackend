@@ -412,15 +412,15 @@ export const DashboardScreen = ({ onNavigate }) => {
             
             {/* Show full sector list directly in the tab instead of a modal! */}
             <View style={{ paddingHorizontal: 14, marginTop: 16 }}>
-              {marketData?.sectorData ? marketData.sectorData.map((sector, i) => (
+              {sectorStocks && sectorStocks.length > 0 ? sectorStocks.map((sector, i) => (
                 <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.borderLight }}>
-                  <Text style={{ color: theme.colors.textPrimary, fontWeight: '700', fontSize: 13, flex: 1 }}>{sector.symbol}</Text>
+                  <Text style={{ color: theme.colors.textPrimary, fontWeight: '700', fontSize: 13, flex: 1 }}>{sector.name || sector.symbol}</Text>
                   <Text style={{ color: (sector.change_pct || 0) > 0 ? theme.colors.bullish : theme.colors.bearish, fontWeight: '800', fontSize: 13 }}>
                     {(sector.change_pct || 0) > 0 ? '+' : ''}{(sector.change_pct || 0).toFixed(2)}%
                   </Text>
                 </View>
               )) : (
-                <Text style={{ color: theme.colors.textMuted, textAlign: 'center', marginTop: 20 }}>No sector data available.</Text>
+                <Text style={{ color: theme.colors.textMuted, textAlign: 'center', marginTop: 20 }}>No sector data available</Text>
               )}
             </View>
           </View>

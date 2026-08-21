@@ -84,24 +84,21 @@ export const StockOptionsScreen = ({ onNavigate, onNavigateDesk }) => {
               const isBullish = stock.actionChangePct > 0 || stock.change_pct > 0;
               return (
                 <TouchableOpacity 
-                  style={[
-                    styles.stockCard, 
-                    { backgroundColor: isBullish ? theme.colors.bullish : theme.colors.bearish, borderColor: 'transparent', marginBottom: 10 }
-                  ]}
+                  style={[styles.stockCard, { marginBottom: 10 }]}
                   onPress={() => onNavigateDesk && onNavigateDesk(stock.symbol)}
                 >
                   <View style={styles.stockLeft}>
-                    <Text style={[styles.stockSymbol, { color: '#ffffff' }]}>{stock.symbol}</Text>
-                    <Text style={[styles.stockLtp, { color: 'rgba(255,255,255,0.8)' }]}>₹{Number(stock.ltp).toFixed(2)}</Text>
+                    <Text style={styles.stockSymbol}>{stock.symbol}</Text>
+                    <Text style={styles.stockLtp}>₹{Number(stock.ltp).toFixed(2)}</Text>
                   </View>
                   
                   <View style={styles.stockRight}>
-                    <View style={[styles.badge, { backgroundColor: 'transparent' }]}>
-                      <Text style={[styles.badgeText, { color: '#ffffff', fontSize: 13 }]}>
+                    <View style={styles.badge}>
+                      <Text style={[styles.badgeText, { color: isBullish ? theme.colors.bullish : theme.colors.bearish }]}>
                         {stock.change_pct > 0 ? '+' : ''}{Number(stock.change_pct).toFixed(2)}%
                       </Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.5)" style={{ marginLeft: 8 }} />
+                    <Ionicons name="chevron-forward" size={16} color={theme.colors.textMuted} style={{ marginLeft: 8 }} />
                   </View>
                 </TouchableOpacity>
               );
