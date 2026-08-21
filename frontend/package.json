@@ -7,7 +7,7 @@
     "dev": "powershell -ExecutionPolicy Bypass -File scripts/start-dev.ps1",
     "start:app": "powershell -ExecutionPolicy Bypass -File scripts/start-app.ps1",
     "dev:vite": "vite",
-    "build": "vite build",
+    "build": "cd ../mobile-app && npm install && npx expo export -p web && rm -rf ../frontend/dist && cp -r dist ../frontend/dist",
     "lint": "eslint .",
     "preview": "vite preview"
   },
