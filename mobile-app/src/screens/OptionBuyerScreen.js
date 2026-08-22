@@ -42,7 +42,7 @@ export const OptionBuyerScreen = ({ onNavigate }) => {
 
   return (
     <View style={styles.container}>
-      <IndexHeader />
+      <IndexHeader onNavigate={onNavigate} />
       <ScrollView style={styles.scrollArea}>
         <Text style={styles.title}>Option Buyer Hub</Text>
       

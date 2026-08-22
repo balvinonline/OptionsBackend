@@ -98,21 +98,18 @@ export const DashboardScreen = ({ onNavigate }) => {
     <View style={styles.container}>
       {/* Smart Top Segmented Tabs (Kotak Style) */}
       <View style={styles.segmentedTabsContainer}>
-        <TouchableOpacity 
-          style={[styles.segmentedTab, activeDashTab === 'Stocks' && styles.segmentedTabActive]}
-          onPress={() => setActiveDashTab('Stocks')}
-        >
-          <Text style={[styles.segmentedTabText, activeDashTab === 'Stocks' && styles.segmentedTabTextActive]}>Stocks</Text>
-          {activeDashTab === 'Stocks' && <View style={styles.segmentedTabActiveIndicator} />}
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.segmentedTab, activeDashTab === 'F&O' && styles.segmentedTabActive]}
-          onPress={() => setActiveDashTab('F&O')}
-        >
-          <Text style={[styles.segmentedTabText, activeDashTab === 'F&O' && styles.segmentedTabTextActive]}>F&O</Text>
-          {activeDashTab === 'F&O' && <View style={styles.segmentedTabActiveIndicator} />}
-        </TouchableOpacity>
-        
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          {['Market Stats', 'F&O', 'Stocks', 'Sector Performance'].map((tab) => (
+            <TouchableOpacity 
+              key={tab}
+              style={[styles.segmentedTab, activeDashTab === tab && styles.segmentedTabActive]}
+              onPress={() => setActiveDashTab(tab)}
+            >
+              <Text style={[styles.segmentedTabText, activeDashTab === tab && styles.segmentedTabTextActive]}>{tab}</Text>
+              {activeDashTab === tab && <View style={styles.segmentedTabActiveIndicator} />}
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
       {error ? (
