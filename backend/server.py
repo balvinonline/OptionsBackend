@@ -4,7 +4,7 @@ import time
 import math
 import requests
 import threading
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, time as dt_time, timezone
 import pytz
 import json
 from email.utils import parsedate_to_datetime
@@ -36,13 +36,18 @@ def request_with_timeout(self, method, url, **kwargs):
     return original_request(self, method, url, **kwargs)
 requests.Session.request = request_with_timeout
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def ist_now():
+    return datetime.now(IST)
+
 def is_market_open():
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist)
-    if now.weekday() >= 5: # Saturday = 5, Sunday = 6
+    now = ist_now()
+    if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
         return False
-    market_start = dt_time(9, 0)
-    market_end = dt_time(15, 35) # Keep alive slightly after 3:30 to catch closing prints
+    # Intentionally start at 09:30 to save FYERS quota and skip the opening 15 minutes.
+    market_start = dt_time(9, 30)
+    market_end = dt_time(15, 30)
     return market_start <= now.time() <= market_end
 
 from flask import Flask, Response, jsonify, request, stream_with_context
@@ -7028,9 +7033,21 @@ def debug_fyers_quote():
     symbol = request.args.get("symbol", "NSE:NIFTY50-INDEX").strip()
     started = time.time()
 
+    # Avoid consuming quote quota outside the configured live-market window.
+    if not is_market_open():
+        return jsonify({
+            "ok": True,
+            "marketOpen": False,
+            "symbol": symbol,
+            "message": "Market closed. FYERS quote request skipped.",
+            "response": None,
+        })
+
+    refresh_fyers_from_env()
     if not fyers:
         return jsonify({
             "ok": False,
+            "marketOpen": True,
             "symbol": symbol,
             "error": "FYERS client not initialized",
         }), 200
@@ -7038,7 +7055,8 @@ def debug_fyers_quote():
     try:
         resp = fyers.quotes({"symbols": symbol})
         return jsonify({
-            "ok": True,
+            "ok": isinstance(resp, dict) and resp.get("s") == "ok",
+            "marketOpen": True,
             "symbol": symbol,
             "elapsed": round2(time.time() - started),
             "response": resp,
@@ -7046,11 +7064,11 @@ def debug_fyers_quote():
     except Exception as e:
         return jsonify({
             "ok": False,
+            "marketOpen": True,
             "symbol": symbol,
             "elapsed": round2(time.time() - started),
             "error": str(e),
         }), 200
-
 
 @app.route("/api/debug/runtime")
 def api_debug_runtime():
@@ -7097,11 +7115,11 @@ def dashboard_history():
 
 @app.route("/api/fyers/token-status")
 def fyers_token_status():
+    # Re-create the SDK client from the latest token before reporting status.
     refresh_fyers_from_env(force=True)
-    ist = pytz.timezone("Asia/Kolkata")
     return jsonify({
         "ok": True,
-        "timestamp": datetime.now(ist).strftime("%d-%m-%Y %H:%M:%S"),
+        "timestamp": ist_now().strftime("%d-%m-%Y %H:%M:%S"),
         "marketOpen": is_market_open(),
         **get_fyers_env_status(),
     })
@@ -7206,6 +7224,7 @@ def fyers_save_token():
 
     auth_code = extract_fyers_auth_code(payload.get("authCode") or payload.get("finalUrl"))
 
+    # Never log auth_code/finalUrl: both are sensitive authentication material.
     if not fyersModel:
         return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
     if not client_id or not secret_key:
