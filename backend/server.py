@@ -7052,15 +7052,6 @@ def debug_fyers_quote():
         }), 200
 
 
-@app.route("/api/debug/authlog")
-def api_debug_authlog():
-    try:
-        with open("auth_code_debug.log", "r") as f:
-            content = f.read()
-    except Exception as e:
-        content = str(e)
-    return "<pre>" + content + "</pre>"
-
 @app.route("/api/debug/runtime")
 def api_debug_runtime():
     test_quote_resp = {}
@@ -7106,10 +7097,12 @@ def dashboard_history():
 
 @app.route("/api/fyers/token-status")
 def fyers_token_status():
-    load_dotenv(dotenv_path=ENV_PATH, override=True)
+    refresh_fyers_from_env(force=True)
+    ist = pytz.timezone("Asia/Kolkata")
     return jsonify({
         "ok": True,
-        "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+        "timestamp": datetime.now(ist).strftime("%d-%m-%Y %H:%M:%S"),
+        "marketOpen": is_market_open(),
         **get_fyers_env_status(),
     })
 
@@ -7202,21 +7195,16 @@ def fyers_save_token():
         access_token = normalize_fyers_access_token(client_id, direct_token)
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
+        refresh_fyers_from_env(force=True)
         _QUOTE_COOLDOWN_UNTIL = 0.0
         clear_live_market_caches()
         return jsonify({
             "ok": True,
-            "message": "Fyers access token saved. Live feed will reconnect automatically.",
-            "access_token": access_token,
+            "message": "Fyers access token saved and connection initialized.",
             **get_fyers_env_status(),
         })
 
     auth_code = extract_fyers_auth_code(payload.get("authCode") or payload.get("finalUrl"))
-
-    # DEBUG LOGGING FOR AUTH CODE
-    with open("auth_code_debug.log", "a") as f:
-        f.write(f"[{datetime.now()}] Payload: {payload}\n")
-        f.write(f"[{datetime.now()}] Extracted Auth Code: {auth_code}\n")
 
     if not fyersModel:
         return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
@@ -7246,12 +7234,12 @@ def fyers_save_token():
 
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
+        refresh_fyers_from_env(force=True)
         _QUOTE_COOLDOWN_UNTIL = 0.0
         clear_live_market_caches()
         return jsonify({
             "ok": True,
-            "message": "Fyers token saved. Live caches cleared; click Refresh once.",
-            "access_token": access_token,
+            "message": "Fyers token generated and connection initialized.",
             **get_fyers_env_status(),
         })
     except Exception as e:
