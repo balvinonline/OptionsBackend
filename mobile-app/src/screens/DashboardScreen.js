@@ -135,7 +135,7 @@ export const DashboardScreen = ({ onNavigate }) => {
         {/* --- TAB: MARKET STATS --- */}
         {activeDashTab === 'Market Stats' && (
           <View style={{ paddingTop: 10 }}>
-            <IndexHeader onOpenSettings={() => setShowSettings(true)} />
+            <IndexHeader onOpenSettings={() => setShowSettings(true)} onNavigate={onNavigate} />
             <VitalSignsHUD marketData={marketData} />
           </View>
         )}

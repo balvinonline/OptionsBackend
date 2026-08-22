@@ -70,7 +70,9 @@ function MainLayout() {
               <Text style={styles.kotakSearchText}>Search eg: NIFTY CE</Text>
             </View>
             <View style={styles.kotakHeaderIcons}>
-              <Ionicons name="notifications-outline" size={22} color={theme.colors.textPrimary} />
+              <TouchableOpacity onPress={() => setActiveTab('Signals')}>
+                <Ionicons name="notifications-outline" size={22} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
             </View>
           </View>
         ) : (

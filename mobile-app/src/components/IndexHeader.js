@@ -14,7 +14,7 @@ const INDEX_ICONS = {
   'MIDCPNIFTY': require('../../assets/nifty midcap.png'),
 };
 
-export const IndexHeader = ({ onOpenSettings }) => {
+export const IndexHeader = ({ onOpenSettings, onNavigate }) => {
   const { theme } = useTheme();
   const styles = getStyles(theme);
   const { selectedIndex, setSelectedIndex, isConnected, lastUpdated, refresh, isRefreshing } = useMarket();
@@ -26,7 +26,9 @@ export const IndexHeader = ({ onOpenSettings }) => {
 
       {/* Option Chain Section Header */}
       <View style={styles.optionChainHeader}>
-        <Text style={styles.headerTitle}>Option chain</Text>
+        <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }} onPress={() => onNavigate && onNavigate('Chain')}>
+          <Text style={[styles.headerTitle, { color: theme.colors.primary, fontSize: 16 }]}>Option chain ↗</Text>
+        </TouchableOpacity>
         <View style={styles.liveIndicatorRow}>
           <TouchableOpacity onPress={() => onOpenSettings && onOpenSettings()} style={{ marginRight: 12, padding: 4 }}>
             <Ionicons name="settings" size={16} color={theme.colors.textMuted} />
@@ -144,9 +146,9 @@ const getStyles = (theme) => StyleSheet.create({
     width: 60,
   },
   circleBadge: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: theme.colors.bgCardElevated || theme.colors.bgCardSolid,
     borderWidth: 1,
     borderColor: theme.colors.border,
@@ -156,10 +158,11 @@ const getStyles = (theme) => StyleSheet.create({
   },
   circleBadgeActive: {
     borderColor: theme.colors.primary,
+    borderWidth: 2,
   },
   circleBadgeIconText: {
     color: theme.colors.textPrimary,
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: '900',
   },
   circleBadgeIconTextActive: {
@@ -167,7 +170,7 @@ const getStyles = (theme) => StyleSheet.create({
   },
   badgeLabel: {
     color: theme.colors.textSecondary,
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '600',
     textAlign: 'center',
   },
