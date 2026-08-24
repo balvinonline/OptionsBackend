@@ -8126,6 +8126,11 @@ def handle_unsubscribe(data):
         leave_room(sym.strip().upper())
 
 
+
+# OptionsDesk v1.9.5 secure mobile auth + Kotak Neo routes
+from optionsdesk_v195_routes import register_optionsdesk_v195_routes
+register_optionsdesk_v195_routes(app)
+
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", debug=False, port=5000, use_reloader=False, allow_unsafe_werkzeug=True)
 
