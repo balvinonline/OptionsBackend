@@ -8527,6 +8527,8 @@ _BACKGROUND_ATTENTION_STATUS = {
     "lastError": None,
     "lastAlert": None,
 }
+_BACKGROUND_ATTENTION_THREAD = None
+_BACKGROUND_ATTENTION_THREAD_LOCK = threading.Lock()
 
 
 def background_attention_monitor_enabled():
@@ -8847,8 +8849,12 @@ def _background_cas_scan(symbol, now_ts):
 
 
 def background_attention_monitor_loop():
-    time.sleep(12)
+    # Mark the worker-owned monitor alive immediately. Under gunicorn the app
+    # is imported inside the worker, so status must not wait behind startup sleep.
     _BACKGROUND_ATTENTION_STATUS["running"] = True
+    _BACKGROUND_ATTENTION_STATUS["lastCycleAt"] = ist_now().isoformat(timespec="seconds")
+    _BACKGROUND_ATTENTION_STATUS["lastError"] = None
+    time.sleep(2)
     last_deep_scan = 0.0
 
     while True:
@@ -8860,6 +8866,12 @@ def background_attention_monitor_loop():
                 _BACKGROUND_ATTENTION_STATUS["lastCycleAt"] = now.isoformat(timespec="seconds")
                 time.sleep(BACKGROUND_ATTENTION_INTERVAL)
                 continue
+
+            # A persisted FYERS access token can exist while the in-memory SDK
+            # client is still None after a fresh Render/gunicorn worker boot.
+            # Rehydrate it before the server-side scan needs market data.
+            if fyers is None and os.getenv("FYERS_ACCESS_TOKEN", "").strip():
+                refresh_fyers_from_env(force=True)
 
             home = build_home_dashboard() or {}
             cards = home.get("indices") or {}
@@ -8931,19 +8943,56 @@ def background_attention_monitor_loop():
         time.sleep(BACKGROUND_ATTENTION_INTERVAL)
 
 
+# --- V2.0.20K HOTFIX-1 GUNICORN MONITOR START ---
+def ensure_background_attention_monitor_started():
+    global _BACKGROUND_ATTENTION_THREAD
+
+    if not background_attention_monitor_enabled():
+        _BACKGROUND_ATTENTION_STATUS["running"] = False
+        return False
+
+    thread = _BACKGROUND_ATTENTION_THREAD
+    if thread is not None and thread.is_alive():
+        return True
+
+    with _BACKGROUND_ATTENTION_THREAD_LOCK:
+        thread = _BACKGROUND_ATTENTION_THREAD
+        if thread is not None and thread.is_alive():
+            return True
+
+        thread = threading.Thread(
+            target=background_attention_monitor_loop,
+            daemon=True,
+            name="optionsdesk-attention-monitor",
+        )
+        _BACKGROUND_ATTENTION_THREAD = thread
+        thread.start()
+        return True
+
+
+@app.before_request
+def _ensure_background_attention_monitor_for_worker():
+    # This is intentionally idempotent. It guarantees that the actual gunicorn
+    # worker handling HTTP has its own monitor, even if module startup behavior
+    # differs across deploy/runtime modes.
+    ensure_background_attention_monitor_started()
+
+
 @app.route('/api/device/attention-status', methods=['GET'])
 def api_device_attention_status():
+    ensure_background_attention_monitor_started()
     return jsonify({
         "ok": True,
         "enabled": background_attention_monitor_enabled(),
         "marketWindow": background_attention_market_window(),
         **_BACKGROUND_ATTENTION_STATUS,
+        "threadAlive": bool(_BACKGROUND_ATTENTION_THREAD and _BACKGROUND_ATTENTION_THREAD.is_alive()),
         "build": SERVER_BUILD_MARKER,
     })
 
 
-if background_attention_monitor_enabled():
-    threading.Thread(target=background_attention_monitor_loop, daemon=True, name="optionsdesk-attention-monitor").start()
+ensure_background_attention_monitor_started()
+# --- V2.0.20K HOTFIX-1 GUNICORN MONITOR END ---
 
 # --- V2.0.20K BACKGROUND ATTENTION MONITOR END ---
 
