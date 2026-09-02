@@ -285,7 +285,7 @@ def api_device_test_push():
         result = send_expo_push_notification(
             token,
             "OptionsDesk remote push test ✅",
-            "Backend → Expo → FCM → phone path is working.",
+            "Backend → Expo → FCM → phone works. Server alerts can reach you while OptionsDesk is off-screen.",
             {"type": "remote-push-test", "createdAt": int(time.time() * 1000)},
         )
         now_text = ist_now().isoformat(timespec='seconds')
@@ -358,7 +358,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "v2.0.20k-attention-20260901"
+SERVER_BUILD_MARKER = "v2.0.20l-alert-ux-20260902"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
@@ -8763,8 +8763,8 @@ def _background_prepare_scan(symbol):
         if confidence < 50 or vwap_opposed or len(confirmations) < 2 or score < 55:
             return
 
-        title = f"🔔 {symbol} PREPARE · {side} WATCH"
-        body = " + ".join(confirmations[:3]) + f" | setup {score}/100 | Open chart and get ready · no entry yet"
+        title = f"🔔 {symbol} {side} PREPARE · {score}%"
+        body = " + ".join(confirmations[:3]) + " | Open chart now · no entry yet"
         _background_push_all(
             title,
             body,
@@ -8826,8 +8826,8 @@ def _background_cas_scan(symbol, now_ts):
         state = "REVIEW NOW" if review else "BUILDING"
         score = 75 if review else 62
         moves = [x for x in (_background_signed("30s", m30), _background_signed("1m", m60), _background_signed("3m", m180)) if x]
-        title = f"{'🟢' if direction == 'UP' else '🔴'} {symbol} CAS {state} · {side} WATCH"
-        body = " · ".join(moves) + " | Derivative movement, not spot-gap | Open CAS chart · review only"
+        title = f"🔔🔔 {symbol} {side} CAS {state}"
+        body = " · ".join(moves) + " | Derivative move · review before broker RMS cut-off"
         _background_push_all(
             title,
             body,
@@ -8907,9 +8907,9 @@ def background_attention_monitor_loop():
                         body = " · ".join(pieces)
                         if evidence:
                             body += " | " + " + ".join(evidence)
-                        body += f" | {side} side developing | Open chart now · no entry yet"
+                        body += " | Open chart now · no entry yet"
                         _background_push_all(
-                            f"⚡ {symbol} FAST MOVE WATCH {'↑' if direction == 'UP' else '↓'}",
+                            f"⚡ {symbol} {side} FAST MOVE · {move['score']}% {'↑' if direction == 'UP' else '↓'}",
                             body,
                             {
                                 "type": "server-fast-move-watch",
@@ -8943,6 +8943,8 @@ def background_attention_monitor_loop():
         time.sleep(BACKGROUND_ATTENTION_INTERVAL)
 
 
+# --- V2.0.20L ALERT UX START ---
+# Notification-copy-only update; 20K thresholds, cooldowns and monitor lifecycle are unchanged.
 # --- V2.0.20K HOTFIX-1 GUNICORN MONITOR START ---
 def ensure_background_attention_monitor_started():
     global _BACKGROUND_ATTENTION_THREAD
