@@ -45,8 +45,9 @@ def is_market_open():
     now = ist_now()
     if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
         return False
-    # Intentionally start at 09:30 to save FYERS quota and skip the opening 15 minutes.
-    market_start = dt_time(9, 30)
+    # V2.0.20M: collect the opening session from 09:15 so gap-up/gap-down
+    # direction can be measured instead of inheriting only previous-close bias.
+    market_start = dt_time(9, 15)
     market_end = dt_time(15, 30)
     return market_start <= now.time() <= market_end
 
@@ -358,7 +359,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "v2.0.20l-alert-ux-20260902"
+SERVER_BUILD_MARKER = "v2.0.20m-gap-direction-safety-20260902"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
@@ -3923,6 +3924,7 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
     call_put_dominance = build_call_put_dominance(chain)
     smart_oi_flow = build_smart_oi_flow(chain, spot_ltp)
     market_regime = build_market_regime(spot, future, vix, ad, pcr, smart_oi_flow)
+    opening_gap = build_opening_gap_context(symbol_key, spot, future)
     breadth_stats = build_breadth_stats(ad, sectors)
     gamma_exposure = compute_gamma_exposure(chain, spot_ltp)
     gex_summary = compute_gex_summary(gamma_exposure, spot_ltp)
@@ -3943,7 +3945,8 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
         breakout_breakdown,
         call_put_dominance,
         smart_oi_flow,
-        market_regime
+        market_regime,
+        opening_gap
     )
 
 
@@ -3997,6 +4000,7 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
         "callPutDominance": call_put_dominance,
         "smartOIFlow": smart_oi_flow,
         "marketRegime": market_regime,
+        "openingGap": opening_gap,
         "breadthStats": breadth_stats,
         "sectorRotation": sector_rotation,
         "optionsFlowDetector": options_flow_detector,
@@ -4907,7 +4911,103 @@ def build_bias_breakdown(ad_ratio, breakout_breakdown, call_put_dominance, smart
     }
 
 
-def build_bias_scores(ad_ratio, breakout_breakdown, call_put_dominance, smart_oi_flow, market_regime):
+
+def build_opening_gap_context(symbol_key, spot, future=None):
+    """Separate overnight gap from today's intraday direction.
+
+    A negative day change can coexist with a strong recovery from today's open.
+    In that situation PE must not remain actionable merely because price is still
+    below yesterday's close. The reverse applies to a gap-up that is selling off.
+    """
+    spot = spot or {}
+    future = future or {}
+    current = safe_float(spot.get("ltp"), None)
+    if current is None:
+        current = safe_float(future.get("ltp"), None)
+    today_open = safe_float(spot.get("open"), None)
+    if today_open is None:
+        today_open = safe_float(future.get("open"), None)
+    prev_close = safe_float(spot.get("prev_close"), None)
+    if prev_close is None:
+        prev_close = safe_float(future.get("prev_close"), None)
+
+    gap_threshold = 0.20 if str(symbol_key).upper() == "BANKNIFTY" else 0.18
+    direction_threshold = 0.15 if str(symbol_key).upper() == "BANKNIFTY" else 0.12
+    fill_tolerance = 0.05
+
+    if current in (None, 0) or today_open in (None, 0) or prev_close in (None, 0):
+        return {
+            "available": False,
+            "state": "UNAVAILABLE",
+            "gapSide": "FLAT",
+            "intradayDirection": "FLAT",
+            "gapPct": None,
+            "fromOpenPct": None,
+            "dayChangePct": pct_change(current, prev_close) if current not in (None, 0) and prev_close not in (None, 0) else None,
+            "todayOpen": round2(today_open),
+            "prevClose": round2(prev_close),
+            "current": round2(current),
+            "conflictSide": None,
+            "conflictReason": None,
+        }
+
+    gap_pct = pct_change(today_open, prev_close)
+    from_open_pct = pct_change(current, today_open)
+    day_change_pct = pct_change(current, prev_close)
+
+    gap_side = "UP" if gap_pct is not None and gap_pct >= gap_threshold else "DOWN" if gap_pct is not None and gap_pct <= -gap_threshold else "FLAT"
+    intraday_direction = "UP" if from_open_pct is not None and from_open_pct >= direction_threshold else "DOWN" if from_open_pct is not None and from_open_pct <= -direction_threshold else "FLAT"
+
+    state = "FLAT OPEN"
+    if gap_side == "UP":
+        if current <= prev_close * (1 + fill_tolerance / 100.0):
+            state = "GAP UP REVERSAL"
+        elif intraday_direction == "DOWN":
+            state = "GAP UP FILLING"
+        elif intraday_direction == "UP":
+            state = "GAP UP CONTINUATION"
+        else:
+            state = "GAP UP HOLDING"
+    elif gap_side == "DOWN":
+        if current >= prev_close * (1 - fill_tolerance / 100.0):
+            state = "GAP DOWN FILLED / RECOVERY"
+        elif intraday_direction == "UP":
+            state = "GAP DOWN RECOVERY"
+        elif intraday_direction == "DOWN":
+            state = "GAP DOWN CONTINUATION"
+        else:
+            state = "GAP DOWN HOLDING"
+    elif intraday_direction == "UP":
+        state = "OPENING RANGE UP"
+    elif intraday_direction == "DOWN":
+        state = "OPENING RANGE DOWN"
+
+    # Current movement from today's open is an explicit safety veto against the
+    # opposite option side. It does not auto-create an entry on the other side;
+    # it simply forces WAIT until the remaining confirmations agree.
+    conflict_side = "PE" if intraday_direction == "UP" else "CE" if intraday_direction == "DOWN" else None
+    conflict_reason = None
+    if conflict_side:
+        conflict_reason = f"{state}: price is {abs(from_open_pct or 0):.2f}% {'above' if intraday_direction == 'UP' else 'below'} today's open"
+
+    return {
+        "available": True,
+        "state": state,
+        "gapSide": gap_side,
+        "intradayDirection": intraday_direction,
+        "gapPct": round2(gap_pct),
+        "fromOpenPct": round2(from_open_pct),
+        "dayChangePct": round2(day_change_pct),
+        "todayOpen": round2(today_open),
+        "prevClose": round2(prev_close),
+        "current": round2(current),
+        "gapThresholdPct": gap_threshold,
+        "directionThresholdPct": direction_threshold,
+        "conflictSide": conflict_side,
+        "conflictReason": conflict_reason,
+    }
+
+def build_bias_scores(ad_ratio, breakout_breakdown, call_put_dominance, smart_oi_flow, market_regime, opening_gap=None):
     bullish_score = 0
     bearish_score = 0
 
@@ -4938,6 +5038,22 @@ def build_bias_scores(ad_ratio, breakout_breakdown, call_put_dominance, smart_oi
         bullish_score += 2
     elif structure == "Breakdown":
         bearish_score += 2
+
+    gap = opening_gap or {}
+    gap_state = str(gap.get("state") or "").upper()
+    intraday_direction = str(gap.get("intradayDirection") or "").upper()
+    if intraday_direction == "UP":
+        bullish_score += 1
+    elif intraday_direction == "DOWN":
+        bearish_score += 1
+    if "GAP DOWN RECOVERY" in gap_state:
+        bullish_score += 2
+    elif "GAP UP FILLING" in gap_state or "GAP UP REVERSAL" in gap_state:
+        bearish_score += 2
+    elif gap_state == "GAP UP CONTINUATION":
+        bullish_score += 1
+    elif gap_state == "GAP DOWN CONTINUATION":
+        bearish_score += 1
 
     return {
         "bullish": bullish_score,
@@ -4986,6 +5102,7 @@ def build_trade_signal_panel(spot, future, analytics, ad):
     oi_flow = analytics.get("smartOIFlow", {})
     dominance = analytics.get("callPutDominance", {})
     sr = analytics.get("supportResistance", {})
+    opening_gap = analytics.get("openingGap", {}) or {}
 
     ref = safe_float(spot.get("ltp"), None)
     if ref is None:
@@ -5006,7 +5123,7 @@ def build_trade_signal_panel(spot, future, analytics, ad):
         [safe_float(x, None) for x in resistances if safe_float(x, None) is not None]
     )
 
-    scores = build_bias_scores(ad_ratio, breakout, dominance, oi_flow, regime)
+    scores = build_bias_scores(ad_ratio, breakout, dominance, oi_flow, regime, opening_gap)
     bullish_score = num_int(scores.get("bullish"), 0)
     bearish_score = num_int(scores.get("bearish"), 0)
 
@@ -5022,6 +5139,19 @@ def build_trade_signal_panel(spot, future, analytics, ad):
         bias = "Bearish"
         action = "Buy PE / Bearish setup"
         confidence = min(90, 55 + bearish_score * 6)
+
+    blocked_bias = None
+    direction_conflict = False
+    direction_conflict_reason = None
+    selected_side = "CE" if bias == "Bullish" else "PE" if bias == "Bearish" else None
+    conflict_side = str(opening_gap.get("conflictSide") or "").upper()
+    if selected_side and conflict_side == selected_side:
+        blocked_bias = bias
+        direction_conflict = True
+        direction_conflict_reason = opening_gap.get("conflictReason") or "Current direction from today's open opposes this side"
+        bias = "Neutral"
+        action = "Wait - opening/intraday direction conflict"
+        confidence = min(confidence, 55)
 
     entry = ref
     target = None
@@ -5118,6 +5248,10 @@ def build_trade_signal_panel(spot, future, analytics, ad):
         "projectedMove": round2(projected_move) if projected_move is not None else None,
         "breakoutLevel": round2(breakout_level) if breakout_level is not None else None,
         "breakdownLevel": round2(breakdown_level) if breakdown_level is not None else None,
+        "openingGap": opening_gap,
+        "directionConflict": direction_conflict,
+        "directionConflictReason": direction_conflict_reason,
+        "blockedBias": blocked_bias,
     }
 
 
@@ -8540,9 +8674,10 @@ def background_attention_market_window(now=None):
     if now.weekday() >= 5:
         return False
     minutes = now.hour * 60 + now.minute
-    # FYERS intraday monitoring starts at 09:30 on this backend. Stop before
-    # broker RMS/safety cut-off so no new-entry-style wake-up is created late.
-    return 9 * 60 + 30 <= minutes <= 15 * 60 + 24
+    # V2.0.20M: start background observation at 09:15 so the opening gap is
+    # captured. PREPARE is still suppressed for the first five minutes below.
+    # Stop before broker RMS/safety cut-off so no new-entry-style wake-up is created late.
+    return 9 * 60 + 15 <= minutes <= 15 * 60 + 24
 
 
 def background_cas_window(now=None):
@@ -8711,6 +8846,48 @@ def _background_signed(label, value):
     return f"{label} {value:+.0f} pts"
 
 
+
+def _background_gap_direction_scan(symbol):
+    """Warn on a gap recovery/reversal that blocks the stale/opposite side."""
+    try:
+        now = ist_now()
+        minutes = now.hour * 60 + now.minute
+        if minutes < 9 * 60 + 15 or minutes > 10 * 60 + 30:
+            return
+        data = build_dashboard(symbol, cache_ttl=15) or {}
+        analytics = data.get("analytics") or {}
+        gap = analytics.get("openingGap") or {}
+        if not gap.get("available"):
+            return
+        conflict_side = str(gap.get("conflictSide") or "").upper()
+        state = str(gap.get("state") or "").upper()
+        from_open = safe_float(gap.get("fromOpenPct"), None)
+        gap_pct = safe_float(gap.get("gapPct"), None)
+        if conflict_side not in ("CE", "PE") or from_open is None:
+            return
+        if not any(token in state for token in ("RECOVERY", "FILLING", "REVERSAL", "OPENING RANGE")):
+            return
+        body = f"Gap {gap_pct:+.2f}% · from open {from_open:+.2f}% | {conflict_side} blocked while current direction opposes it · review chart, no entry"
+        _background_push_all(
+            f"⚠️ {symbol} {state}",
+            body,
+            {
+                "type": "server-gap-direction-watch",
+                "symbol": symbol,
+                "state": state,
+                "conflictSide": conflict_side,
+                "gapPct": gap_pct,
+                "fromOpenPct": from_open,
+                "createdAt": int(time.time() * 1000),
+            },
+            gate_key=f"server:gap:{now.strftime('%Y-%m-%d')}:{symbol}:{state}:{conflict_side}",
+            score=65,
+            cooldown_seconds=20 * 60,
+            score_upgrade=100,
+        )
+    except Exception as exc:
+        _BACKGROUND_ATTENTION_STATUS["lastError"] = f"gap {symbol}: {exc}"
+
 def _background_prepare_scan(symbol):
     try:
         data = build_dashboard(symbol, cache_ttl=20) or {}
@@ -8720,12 +8897,21 @@ def _background_prepare_scan(symbol):
 
         analytics = data.get("analytics") or {}
         panel = analytics.get("tradeSignalPanel") or {}
+        gap = analytics.get("openingGap") or panel.get("openingGap") or {}
         zone = analytics.get("tradeZones") or {}
+
+        # Let the first 5 minutes establish today's open direction. The server
+        # may still collect prices and send non-entry wake-ups from 09:15.
+        now = ist_now()
+        if now.hour == 9 and now.minute < 20:
+            return
         breakout = analytics.get("breakoutBreakdown") or {}
 
         bias = str(panel.get("bias") or "").strip().lower()
         side = "CE" if bias == "bullish" else "PE" if bias == "bearish" else None
         if not side:
+            return
+        if str(gap.get("conflictSide") or "").upper() == side:
             return
 
         confidence = safe_float(panel.get("confidence"), 0) or 0
@@ -8927,6 +9113,7 @@ def background_attention_monitor_loop():
 
             if now_ts - last_deep_scan >= BACKGROUND_DEEP_SCAN_INTERVAL:
                 for symbol in BACKGROUND_INDEX_SYMBOLS:
+                    _background_gap_direction_scan(symbol)
                     _background_prepare_scan(symbol)
                 last_deep_scan = now_ts
                 _BACKGROUND_ATTENTION_STATUS["lastDeepScanAt"] = now.isoformat(timespec="seconds")
@@ -8943,6 +9130,8 @@ def background_attention_monitor_loop():
         time.sleep(BACKGROUND_ATTENTION_INTERVAL)
 
 
+# --- V2.0.20M GAP DIRECTION SAFETY START ---
+# Gap-up/gap-down context, current-vs-open direction veto, and opening-session monitoring.
 # --- V2.0.20L ALERT UX START ---
 # Notification-copy-only update; 20K thresholds, cooldowns and monitor lifecycle are unchanged.
 # --- V2.0.20K HOTFIX-1 GUNICORN MONITOR START ---
