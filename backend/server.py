@@ -359,7 +359,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "v2.0.20m1-gap-visibility-safety-20260902"
+SERVER_BUILD_MARKER = "v2.0.20n-direction-first-20260902"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
@@ -8675,6 +8675,14 @@ BACKGROUND_FAST_LIMITS = {
     "BANKNIFTY": {"s30": 20.0, "m1": 35.0, "m3": 60.0},
     "SENSEX": {"s30": 35.0, "m1": 60.0, "m3": 100.0},
 }
+# 20N uses smaller movement thresholds for direction confirmation than the
+# FAST MOVE wake-up. These do not create an entry; they only decide whether a
+# WATCH / DIRECTION CONFIRMED notification is even allowed.
+BACKGROUND_DIRECTION_LIMITS = {
+    "NIFTY": {"m1": 5.0, "m3": 10.0},
+    "BANKNIFTY": {"m1": 10.0, "m3": 20.0},
+    "SENSEX": {"m1": 18.0, "m3": 35.0},
+}
 BACKGROUND_EXPECTED_RANGES = {
     "NIFTY": (15000.0, 40000.0),
     "BANKNIFTY": (30000.0, 90000.0),
@@ -8917,6 +8925,13 @@ def _background_gap_direction_scan(symbol):
         _BACKGROUND_ATTENTION_STATUS["lastError"] = f"gap {symbol}: {exc}"
 
 def _background_prepare_scan(symbol):
+    """20N Direction-First wake-up scan.
+
+    Price decides direction: today's from-open move, recent 1m/3m movement and
+    VWAP. OI/PCR/breadth do not vote the engine onto CE/PE. Breakout/breakdown
+    is the setup trigger. This server scan never declares an option ENTRY READY;
+    the phone still requires selected-option premium confirmation.
+    """
     try:
         data = build_dashboard(symbol, cache_ttl=20) or {}
         spot = safe_float((data.get("spot") or {}).get("ltp"), None)
@@ -8924,84 +8939,114 @@ def _background_prepare_scan(symbol):
             return
 
         analytics = data.get("analytics") or {}
-        panel = analytics.get("tradeSignalPanel") or {}
-        gap = analytics.get("openingGap") or panel.get("openingGap") or {}
+        gap = analytics.get("openingGap") or {}
         zone = analytics.get("tradeZones") or {}
+        breakout = analytics.get("breakoutBreakdown") or {}
 
-        # Let the first 5 minutes establish today's open direction. The server
-        # may still collect prices and send non-entry wake-ups from 09:15.
         now = ist_now()
         if now.hour == 9 and now.minute < 20:
             return
-        breakout = analytics.get("breakoutBreakdown") or {}
-
-        bias = str(panel.get("bias") or "").strip().lower()
-        side = "CE" if bias == "bullish" else "PE" if bias == "bearish" else None
-        if not side:
-            return
-        # Never emit directional PREPARE when today's opening context is missing.
         if not gap.get("available"):
             return
+
+        history = _BACKGROUND_SPOT_HISTORY.get(symbol) or []
+        if len(history) < 3:
+            return
+        limits = BACKGROUND_DIRECTION_LIMITS[symbol]
+        now_ts = time.time()
+        move1m = _background_move(history, now_ts, 60)
+        move3m = _background_move(history, now_ts, 180)
+        dir1 = _background_direction(move1m, limits["m1"])
+        dir3 = _background_direction(move3m, limits["m3"])
+        from_open_dir = str(gap.get("intradayDirection") or "FLAT").upper()
+        if from_open_dir not in ("UP", "DOWN"):
+            from_open_dir = "FLAT"
+
+        direction = "FLAT"
+        if dir1 != "FLAT" and dir1 == dir3:
+            direction = dir1
+        elif from_open_dir != "FLAT":
+            short_dirs = [item for item in (dir1, dir3) if item != "FLAT"]
+            if not any(item != from_open_dir for item in short_dirs) and (not short_dirs or any(item == from_open_dir for item in short_dirs)):
+                direction = from_open_dir
+        if direction == "FLAT":
+            return
+
+        # A material from-open move in the opposite direction is a hard veto.
+        if from_open_dir != "FLAT" and from_open_dir != direction:
+            return
+        side = "CE" if direction == "UP" else "PE"
         if str(gap.get("conflictSide") or "").upper() == side:
             return
 
-        confidence = safe_float(panel.get("confidence"), 0) or 0
         vwap = safe_float(zone.get("vwap"), None)
-        vwap_aligned = vwap is not None and ((side == "CE" and spot > vwap) or (side == "PE" and spot < vwap))
-        vwap_opposed = vwap is not None and ((side == "CE" and spot < vwap) or (side == "PE" and spot > vwap))
-
-        confirmations = []
-        if vwap_aligned:
-            confirmations.append("VWAP")
-        if str(zone.get("priceSide") or "").upper() == side:
-            confirmations.append("price")
-        if str(zone.get("oiSide") or "").upper() == side:
-            confirmations.append("OI")
-        if bool(zone.get("volumeReady")) and str(zone.get("volumeSide") or "").upper() in (side, "MIXED"):
-            confirmations.append("volume")
-
-        breakout_signal = str(breakout.get("signal") or "").lower()
-        if (side == "CE" and breakout_signal == "breakout") or (side == "PE" and breakout_signal == "breakdown"):
-            confirmations.append("trigger")
-
-        trigger = safe_float(
-            breakout.get("breakoutLevel") if side == "CE" else breakout.get("breakdownLevel"),
-            None,
-        )
-        buffer_points = max(safe_float(zone.get("buffer"), 0) or 0, 12 if symbol == "NIFTY" else 25 if symbol == "BANKNIFTY" else 45)
-        near_trigger = False
-        if trigger is not None:
-            distance = (trigger - spot) if side == "CE" else (spot - trigger)
-            near_trigger = 0 <= distance <= buffer_points * 1.5
-            if near_trigger:
-                confirmations.append("near trigger")
-
-        score = max(55, min(92, round(max(confidence, 50) + max(0, len(confirmations) - 1) * 5)))
-        if confidence < 50 or vwap_opposed or len(confirmations) < 2 or score < 55:
+        if vwap is None:
+            vwap = safe_float((data.get("spot") or {}).get("vwap"), None)
+        vwap_aligned = vwap is not None and ((direction == "UP" and spot > vwap) or (direction == "DOWN" and spot < vwap))
+        if not vwap_aligned:
             return
 
-        title = f"🔔 {symbol} {side} PREPARE · {score}%"
-        body = " + ".join(confirmations[:3]) + " | Open chart now · no entry yet"
+        breakout_signal = str(breakout.get("signal") or "").lower()
+        trigger = safe_float(breakout.get("breakoutLevel") if side == "CE" else breakout.get("breakdownLevel"), None)
+        if trigger is None:
+            return
+        trigger_cleared = (side == "CE" and (spot >= trigger or breakout_signal == "breakout")) or (side == "PE" and (spot <= trigger or breakout_signal == "breakdown"))
+        buffer_points = max(safe_float(zone.get("buffer"), 0) or 0, 12 if symbol == "NIFTY" else 25 if symbol == "BANKNIFTY" else 45)
+        distance = (trigger - spot) if side == "CE" else (spot - trigger)
+        near_trigger = (not trigger_cleared) and 0 <= distance <= buffer_points * 1.5
+        if not trigger_cleared and not near_trigger:
+            return
+
+        evidence = []
+        if from_open_dir == direction:
+            evidence.append("from-open")
+        if dir1 == direction:
+            evidence.append("1m")
+        if dir3 == direction:
+            evidence.append("3m")
+        evidence.append("VWAP")
+        evidence.append("trigger" if trigger_cleared else "near trigger")
+        if len(evidence) < 3:
+            return
+
+        confirmed = bool(trigger_cleared and (dir1 == direction or dir3 == direction))
+        state = "DIRECTION CONFIRMED" if confirmed else "WATCH"
+        score = min(90, (76 if confirmed else 62) + max(0, len(evidence) - 3) * 3)
+        title = f"{'🔔🔔' if confirmed else '🔔'} {symbol} {side} {state}"
+        moves = [x for x in (_background_signed("1m", move1m), _background_signed("3m", move3m)) if x]
+        body = " + ".join(evidence[:4])
+        if moves:
+            body += " | " + " · ".join(moves)
+        body += " | " + ("Direction confirmed · WAIT for option premium entry confirmation" if confirmed else f"Wait for {trigger:.0f} trigger · no entry yet")
         _background_push_all(
             title,
             body,
             {
-                "type": "server-prepare-watch",
+                "type": "server-direction-first-watch",
                 "symbol": symbol,
                 "side": side,
-                "score": score,
+                "direction": direction,
+                "state": state,
+                "trigger": round2(trigger),
+                "move1m": round2(move1m),
+                "move3m": round2(move3m),
                 "createdAt": int(time.time() * 1000),
             },
-            gate_key=f"server:prepare:{symbol}:{side}",
+            gate_key=f"server:direction20n:{symbol}:{side}:{state}",
             score=score,
-            cooldown_seconds=12 * 60,
+            cooldown_seconds=12 * 60 if confirmed else 8 * 60,
             score_upgrade=8,
         )
     except Exception as exc:
-        _BACKGROUND_ATTENTION_STATUS["lastError"] = f"prepare {symbol}: {exc}"
-
+        _BACKGROUND_ATTENTION_STATUS["lastError"] = f"direction20n {symbol}: {exc}"
 
 def _background_cas_scan(symbol, now_ts):
+    """Closing-session review with verified futures required.
+
+    Options-implied levels are context. A server CAS alert is permitted only
+    when an actual configured future quote exists, is sane versus spot, and its
+    recent movement agrees with the persistent options-implied movement.
+    """
     try:
         data = build_dashboard(symbol, cache_ttl=10) or {}
         spot = safe_float((data.get("spot") or {}).get("ltp"), None)
@@ -9009,12 +9054,24 @@ def _background_cas_scan(symbol, now_ts):
         if _background_valid_index_price(symbol, spot) is None or not isinstance(chain, list) or len(chain) < 3:
             return
 
+        cfg = INDEX_MAP.get(symbol) or {}
+        future_symbol = cfg.get("future")
+        future_raw = get_quote_block(future_symbol) if future_symbol else {}
+        future_metrics = extract_quote_metrics(future_raw or {})
+        future_ltp = safe_float(future_metrics.get("ltp"), None)
+        if future_ltp is None or spot in (None, 0):
+            return
+        # Reject stale/cross-routed futures. A normal index-future basis should
+        # remain comfortably inside this wide safety band.
+        if abs(future_ltp - spot) / spot > 0.0075:
+            return
+
         implied = safe_float(infer_spot_from_option_chain(chain), None)
         if implied is None or abs(implied - spot) / spot > 0.03:
             return
 
         history = _BACKGROUND_CAS_HISTORY.setdefault(symbol, [])
-        history.append({"ts": now_ts, "value": implied})
+        history.append({"ts": now_ts, "value": implied, "future": future_ltp})
         history[:] = [x for x in history if now_ts - float(x.get("ts") or 0) <= 5 * 60][-30:]
 
         m30 = _background_move(history, now_ts, 30)
@@ -9028,23 +9085,36 @@ def _background_cas_scan(symbol, now_ts):
         if direction == "FLAT":
             return
 
-        votes = [
-            _background_direction(m30, 3),
-            _background_direction(m60, 5),
-            _background_direction(m180, 8),
-        ]
+        votes = [_background_direction(m30, 3), _background_direction(m60, 5), _background_direction(m180, 8)]
         persistence = sum(1 for item in votes if item == direction)
         building = persistence >= 1 and (abs(m30 or 0) >= 5 or abs(m60 or 0) >= 8 or abs(m180 or 0) >= 12)
         review = persistence >= 2 and (abs(m60 or 0) >= 12 or (abs(m30 or 0) >= 8 and abs(m180 or 0) >= 15))
         if not building:
             return
 
+        fm30 = _background_move(history, now_ts, 30, key="future")
+        fm60 = _background_move(history, now_ts, 60, key="future")
+        fm180 = _background_move(history, now_ts, 180, key="future")
+        future_direction = _background_direction(fm60, 5)
+        if future_direction == "FLAT":
+            future_direction = _background_direction(fm30, 3)
+        if future_direction == "FLAT":
+            future_direction = _background_direction(fm180, 8)
+        future_votes = [_background_direction(fm30, 2), _background_direction(fm60, 4), _background_direction(fm180, 6)]
+        future_persistence = sum(1 for item in future_votes if item == direction)
+        if future_direction != direction or future_persistence < 1:
+            return
+
         side = "CE" if direction == "UP" else "PE"
-        state = "REVIEW NOW" if review else "BUILDING"
-        score = 75 if review else 62
+        state = "REVIEW" if review else "BUILDING"
+        score = 78 if review else 64
         moves = [x for x in (_background_signed("30s", m30), _background_signed("1m", m60), _background_signed("3m", m180)) if x]
-        title = f"🔔🔔 {symbol} {side} CAS {state}"
-        body = " · ".join(moves) + " | Derivative move · review before broker RMS cut-off"
+        future_moves = [x for x in (_background_signed("Fut 30s", fm30), _background_signed("Fut 1m", fm60), _background_signed("Fut 3m", fm180)) if x]
+        title = f"{'🔔🔔' if review else '🔔'} {symbol} {side} CAS {state}"
+        body = " · ".join(moves[:3])
+        if future_moves:
+            body += " | " + " · ".join(future_moves[:2])
+        body += " | Verified future agrees · review only before RMS cut-off"
         _background_push_all(
             title,
             body,
@@ -9054,16 +9124,16 @@ def _background_cas_scan(symbol, now_ts):
                 "side": side,
                 "state": state,
                 "implied": round2(implied),
+                "future": round2(future_ltp),
                 "createdAt": int(time.time() * 1000),
             },
-            gate_key=f"server:cas:{state}:{symbol}:{direction}",
+            gate_key=f"server:cas20n:{state}:{symbol}:{direction}",
             score=score,
             cooldown_seconds=6 * 60 if not review else 12 * 60,
             score_upgrade=8,
         )
     except Exception as exc:
-        _BACKGROUND_ATTENTION_STATUS["lastError"] = f"CAS {symbol}: {exc}"
-
+        _BACKGROUND_ATTENTION_STATUS["lastError"] = f"CAS20N {symbol}: {exc}"
 
 def background_attention_monitor_loop():
     # Mark the worker-owned monitor alive immediately. Under gunicorn the app
@@ -9108,14 +9178,14 @@ def background_attention_monitor_loop():
                     direction = move["direction"]
                     side = "CE" if direction == "UP" else "PE"
                     vwap = safe_float((card.get("spot") or {}).get("vwap"), None)
-                    quick_bias = str(card.get("quickBias") or "").lower()
                     evidence = []
-                    if (direction == "UP" and quick_bias == "bullish") or (direction == "DOWN" and quick_bias == "bearish"):
-                        evidence.append("market bias")
-                    if vwap is not None and ((direction == "UP" and spot > vwap) or (direction == "DOWN" and spot < vwap)):
+                    vwap_aligned = vwap is not None and ((direction == "UP" and spot > vwap) or (direction == "DOWN" and spot < vwap))
+                    if vwap_aligned:
                         evidence.append("VWAP")
 
-                    if evidence or move["score"] >= 72:
+                    # FAST MOVE is only a wake-up, never an entry. Still require
+                    # VWAP agreement so a stale day-bias cannot promote the wrong side.
+                    if vwap_aligned:
                         pieces = [x for x in (
                             _background_signed("30s", move.get("move30s")),
                             _background_signed("1m", move.get("move1m")),
@@ -9126,7 +9196,7 @@ def background_attention_monitor_loop():
                             body += " | " + " + ".join(evidence)
                         body += " | Open chart now · no entry yet"
                         _background_push_all(
-                            f"⚡ {symbol} {side} FAST MOVE · {move['score']}% {'↑' if direction == 'UP' else '↓'}",
+                            f"⚡ {symbol} {side} WATCH {'↑' if direction == 'UP' else '↓'}",
                             body,
                             {
                                 "type": "server-fast-move-watch",
@@ -9161,6 +9231,9 @@ def background_attention_monitor_loop():
         time.sleep(BACKGROUND_ATTENTION_INTERVAL)
 
 
+# --- V2.0.20N DIRECTION-FIRST OPTION-BUYER ENGINE START ---
+# Price/open + recent direction + VWAP -> setup trigger -> option premium on mobile.
+# PCR/OI/day-bias cannot choose the opposite option side.
 # --- V2.0.20M GAP DIRECTION SAFETY START ---
 # Gap-up/gap-down context, current-vs-open direction veto, and opening-session monitoring.
 # --- V2.0.20L ALERT UX START ---
