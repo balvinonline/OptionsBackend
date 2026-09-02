@@ -359,7 +359,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "v2.0.20m-gap-direction-safety-20260902"
+SERVER_BUILD_MARKER = "v2.0.20m1-gap-visibility-safety-20260902"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
@@ -1690,6 +1690,22 @@ def get_intraday_history_snapshot(symbol_key, price=None):
         if not isinstance(history, dict) or not history.get("ok"):
             return {}
         candles = history.get("candles") or []
+        # V2.0.20M1: retain the first real candle open for today's IST session.
+        # Quote feeds can occasionally omit `open`; gap safety must not silently disappear.
+        today = ist_now().date()
+        today_rows = []
+        for row in candles:
+            if not isinstance(row, dict):
+                continue
+            ts = safe_int(row.get("ts"), None)
+            if ts is None:
+                continue
+            try:
+                if datetime.fromtimestamp(ts, IST).date() == today:
+                    today_rows.append(row)
+            except Exception:
+                continue
+        today_open = safe_float(today_rows[0].get("open"), None) if today_rows else None
         vwap = compute_session_vwap(candles)
         volume_snapshot = compute_session_volume_snapshot(candles)
         latest = candles[-1] if candles else {}
@@ -1697,6 +1713,7 @@ def get_intraday_history_snapshot(symbol_key, price=None):
         ref_price = price if price is not None else latest_close
         return {
             "ltp": latest_close,
+            "todayOpen": round2(today_open),
             "vwap": clean_vwap_for_price(vwap, ref_price, max_distance_pct=2.25),
             **volume_snapshot,
             "source": "history_5m",
@@ -3783,6 +3800,10 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
     spot["vwap"] = round2(clean_vwap_for_price(spot.get("vwap"), spot_ltp))
     future["vwap"] = round2(clean_vwap_for_price(future.get("vwap"), future_ltp or spot_ltp))
     history_snapshot = get_intraday_history_snapshot(symbol_key, spot_ltp or future_ltp)
+    history_open = safe_float(history_snapshot.get("todayOpen"), None)
+    if spot.get("open") in (None, 0) and history_open not in (None, 0):
+        spot["open"] = round2(history_open)
+        spot["open_source"] = "history_5m_first_candle"
     history_vwap = history_snapshot.get("vwap")
     if spot.get("vwap") is None and history_vwap is not None:
         spot["vwap"] = round2(history_vwap)
@@ -5145,7 +5166,14 @@ def build_trade_signal_panel(spot, future, analytics, ad):
     direction_conflict_reason = None
     selected_side = "CE" if bias == "Bullish" else "PE" if bias == "Bearish" else None
     conflict_side = str(opening_gap.get("conflictSide") or "").upper()
-    if selected_side and conflict_side == selected_side:
+    if selected_side and not opening_gap.get("available"):
+        blocked_bias = bias
+        direction_conflict = True
+        direction_conflict_reason = "Opening gap / from-open direction unavailable"
+        bias = "Neutral"
+        action = "Wait - opening direction data unavailable"
+        confidence = min(confidence, 50)
+    elif selected_side and conflict_side == selected_side:
         blocked_bias = bias
         direction_conflict = True
         direction_conflict_reason = opening_gap.get("conflictReason") or "Current direction from today's open opposes this side"
@@ -8911,6 +8939,9 @@ def _background_prepare_scan(symbol):
         side = "CE" if bias == "bullish" else "PE" if bias == "bearish" else None
         if not side:
             return
+        # Never emit directional PREPARE when today's opening context is missing.
+        if not gap.get("available"):
+            return
         if str(gap.get("conflictSide") or "").upper() == side:
             return
 
@@ -9265,3 +9296,6 @@ def greeks_updater_thread():
 # Start thread
 threading.Thread(target=greeks_updater_thread, daemon=True).start()
 # ----------------------------------------
+
+
+# --- V2.0.20M1 GAP VISIBILITY SAFETY START ---
