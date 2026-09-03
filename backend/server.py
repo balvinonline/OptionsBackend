@@ -550,6 +550,28 @@ def get_fyers_redirect_uri():
     ).strip()
 
 
+
+def validate_fyers_session_token():
+    """Validate the token with FYERS instead of treating SDK construction as authentication."""
+    refresh_fyers_from_env(force=True)
+    if not fyers:
+        return False, "FYERS client is not initialized"
+
+    try:
+        resp = fyers.get_profile() or {}
+        if isinstance(resp, dict):
+            status = str(resp.get("s") or "").strip().lower()
+            code = resp.get("code")
+            data = resp.get("data")
+            if status == "ok" or code == 200 or (isinstance(data, dict) and bool(data)):
+                return True, ""
+            message = str(resp.get("message") or resp.get("error") or "FYERS rejected the current access token")
+            return False, message
+        return False, "Unexpected FYERS profile response"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def get_fyers_env_status():
     try:
         env_mtime = ENV_PATH.stat().st_mtime if ENV_PATH.exists() else 0.0
@@ -7596,15 +7618,18 @@ def dashboard_history():
 
 @app.route("/api/fyers/token-status")
 def fyers_token_status():
-    # Re-create the SDK client from the latest token before reporting status.
-    refresh_fyers_from_env(force=True)
+    # SDK construction only proves that a token string exists. Validate the
+    # session against FYERS so mobile does not show Connected for an expired or
+    # rejected token.
+    token_valid, validation_error = validate_fyers_session_token()
     return jsonify({
         "ok": True,
         "timestamp": ist_now().strftime("%d-%m-%Y %H:%M:%S"),
         "marketOpen": is_market_open(),
+        "tokenValid": bool(token_valid),
+        "tokenValidationError": validation_error or None,
         **get_fyers_env_status(),
     })
-
 
 @app.route("/api/fyers/login-url")
 def fyers_login_url():
@@ -9439,3 +9464,6 @@ threading.Thread(target=greeks_updater_thread, daemon=True).start()
 
 
 # --- V2.0.20M1 GAP VISIBILITY SAFETY START ---
+
+
+# v2.0.20n2-fyers-health-20260903
