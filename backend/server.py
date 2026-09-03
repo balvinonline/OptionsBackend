@@ -359,7 +359,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "v2.0.20n-direction-first-20260902"
+SERVER_BUILD_MARKER = "v2.0.20n1-option-buyer-rebalance-20260903"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
@@ -8925,12 +8925,22 @@ def _background_gap_direction_scan(symbol):
         _BACKGROUND_ATTENTION_STATUS["lastError"] = f"gap {symbol}: {exc}"
 
 def _background_prepare_scan(symbol):
-    """20N Direction-First wake-up scan.
+    """20N1 price-first option-buyer wake-up scan.
 
-    Price decides direction: today's from-open move, recent 1m/3m movement and
-    VWAP. OI/PCR/breadth do not vote the engine onto CE/PE. Breakout/breakdown
-    is the setup trigger. This server scan never declares an option ENTRY READY;
-    the phone still requires selected-option premium confirmation.
+    The backend only decides directional attention, never an option entry.
+    Current price evidence is weighted so a valid intraday reversal is not
+    blocked forever by the original from-open direction. OI/PCR/breadth remain
+    analytics only and do not vote the CE/PE side here.
+
+    Weights:
+      - from-open direction: 20
+      - recent 1m move:      20
+      - recent 3m move:      30
+      - VWAP side:           30
+
+    DIRECTION CONFIRMED can occur before the full breakout/breakdown if current
+    3m + VWAP + weighted momentum are strong. The phone still requires its own
+    timing/contract/premium checks before ENTRY READY.
     """
     try:
         data = build_dashboard(symbol, cache_ttl=20) or {}
@@ -8952,6 +8962,7 @@ def _background_prepare_scan(symbol):
         history = _BACKGROUND_SPOT_HISTORY.get(symbol) or []
         if len(history) < 3:
             return
+
         limits = BACKGROUND_DIRECTION_LIMITS[symbol]
         now_ts = time.time()
         move1m = _background_move(history, now_ts, 60)
@@ -8962,62 +8973,113 @@ def _background_prepare_scan(symbol):
         if from_open_dir not in ("UP", "DOWN"):
             from_open_dir = "FLAT"
 
-        direction = "FLAT"
-        if dir1 != "FLAT" and dir1 == dir3:
-            direction = dir1
-        elif from_open_dir != "FLAT":
-            short_dirs = [item for item in (dir1, dir3) if item != "FLAT"]
-            if not any(item != from_open_dir for item in short_dirs) and (not short_dirs or any(item == from_open_dir for item in short_dirs)):
-                direction = from_open_dir
-        if direction == "FLAT":
-            return
-
-        # A material from-open move in the opposite direction is a hard veto.
-        if from_open_dir != "FLAT" and from_open_dir != direction:
-            return
-        side = "CE" if direction == "UP" else "PE"
-        if str(gap.get("conflictSide") or "").upper() == side:
-            return
-
         vwap = safe_float(zone.get("vwap"), None)
         if vwap is None:
+            vwap = safe_float(analytics.get("vwap"), None)
+        if vwap is None:
             vwap = safe_float((data.get("spot") or {}).get("vwap"), None)
-        vwap_aligned = vwap is not None and ((direction == "UP" and spot > vwap) or (direction == "DOWN" and spot < vwap))
-        if not vwap_aligned:
+        vwap_dir = "FLAT"
+        if vwap is not None:
+            if spot > vwap:
+                vwap_dir = "UP"
+            elif spot < vwap:
+                vwap_dir = "DOWN"
+
+        weights = {
+            "fromOpen": (from_open_dir, 20),
+            "1m": (dir1, 20),
+            "3m": (dir3, 30),
+            "VWAP": (vwap_dir, 30),
+        }
+
+        def vote(candidate):
+            return sum(weight for direction_value, weight in weights.values() if direction_value == candidate)
+
+        up_score = vote("UP")
+        down_score = vote("DOWN")
+        best_score = max(up_score, down_score)
+        lead = abs(up_score - down_score)
+        if best_score < 50 or lead < 20:
+            return
+
+        direction = "UP" if up_score > down_score else "DOWN"
+        side = "CE" if direction == "UP" else "PE"
+        opposite_score = down_score if direction == "UP" else up_score
+
+        # Current 3m and VWAP are the execution anchors. A single lagging input
+        # (including the original from-open side) is allowed, but broad current
+        # opposition keeps the alert at WAIT.
+        if opposite_score >= 50:
+            return
+        if dir3 not in ("FLAT", direction) and vwap_dir not in ("FLAT", direction):
             return
 
         breakout_signal = str(breakout.get("signal") or "").lower()
-        trigger = safe_float(breakout.get("breakoutLevel") if side == "CE" else breakout.get("breakdownLevel"), None)
+        trigger = safe_float(
+            breakout.get("breakoutLevel") if side == "CE" else breakout.get("breakdownLevel"),
+            None,
+        )
         if trigger is None:
             return
-        trigger_cleared = (side == "CE" and (spot >= trigger or breakout_signal == "breakout")) or (side == "PE" and (spot <= trigger or breakout_signal == "breakdown"))
-        buffer_points = max(safe_float(zone.get("buffer"), 0) or 0, 12 if symbol == "NIFTY" else 25 if symbol == "BANKNIFTY" else 45)
+
+        trigger_cleared = (
+            (side == "CE" and (spot >= trigger or breakout_signal == "breakout"))
+            or (side == "PE" and (spot <= trigger or breakout_signal == "breakdown"))
+        )
+
+        server_buffer = safe_float(zone.get("buffer"), 0) or 0
+        option_buyer_buffer = 18 if symbol == "NIFTY" else 45 if symbol == "BANKNIFTY" else 90
+        early_buffer = max(server_buffer, option_buyer_buffer)
         distance = (trigger - spot) if side == "CE" else (spot - trigger)
-        near_trigger = (not trigger_cleared) and 0 <= distance <= buffer_points * 1.5
-        if not trigger_cleared and not near_trigger:
+        near_trigger = (not trigger_cleared) and 0 <= distance <= early_buffer
+
+        momentum_active = bool(
+            (dir1 == direction and abs(move1m or 0) >= limits["m1"] * 1.15)
+            or (dir3 == direction and abs(move3m or 0) >= limits["m3"] * 1.05)
+        )
+
+        current_anchor = bool(dir3 == direction and vwap_dir == direction)
+        watch = bool(
+            best_score >= 50
+            and (dir1 == direction or dir3 == direction)
+            and vwap_dir in (direction, "FLAT")
+        )
+        if not watch:
             return
+
+        confirmed = bool(
+            best_score >= 70
+            and current_anchor
+            and (trigger_cleared or near_trigger or momentum_active)
+        )
+
+        state = "DIRECTION CONFIRMED" if confirmed else "WATCH"
+        score = min(92, max(55, best_score + (8 if trigger_cleared else 4 if near_trigger else 0)))
 
         evidence = []
-        if from_open_dir == direction:
-            evidence.append("from-open")
-        if dir1 == direction:
-            evidence.append("1m")
-        if dir3 == direction:
-            evidence.append("3m")
-        evidence.append("VWAP")
-        evidence.append("trigger" if trigger_cleared else "near trigger")
-        if len(evidence) < 3:
-            return
+        for label, (direction_value, _weight) in weights.items():
+            if direction_value == direction:
+                evidence.append(label)
+        if trigger_cleared:
+            evidence.append("trigger")
+        elif near_trigger:
+            evidence.append("near trigger")
+        if momentum_active:
+            evidence.append("momentum")
 
-        confirmed = bool(trigger_cleared and (dir1 == direction or dir3 == direction))
-        state = "DIRECTION CONFIRMED" if confirmed else "WATCH"
-        score = min(90, (76 if confirmed else 62) + max(0, len(evidence) - 3) * 3)
         title = f"{'🔔🔔' if confirmed else '🔔'} {symbol} {side} {state}"
         moves = [x for x in (_background_signed("1m", move1m), _background_signed("3m", move3m)) if x]
-        body = " + ".join(evidence[:4])
+        body = f"Price alignment {best_score}/100 · " + " + ".join(evidence[:4])
         if moves:
             body += " | " + " · ".join(moves)
-        body += " | " + ("Direction confirmed · WAIT for option premium entry confirmation" if confirmed else f"Wait for {trigger:.0f} trigger · no entry yet")
+        if confirmed:
+            if trigger_cleared:
+                body += " | Direction confirmed; price trigger cleared · WAIT for option premium entry confirmation"
+            else:
+                body += " | Direction confirmed early; option-buyer momentum active · WAIT for timing + premium confirmation"
+        else:
+            body += f" | Setup developing near {trigger:.0f} · no entry yet"
+
         _background_push_all(
             title,
             body,
@@ -9027,18 +9089,23 @@ def _background_prepare_scan(symbol):
                 "side": side,
                 "direction": direction,
                 "state": state,
+                "alignmentScore": best_score,
+                "oppositeScore": opposite_score,
                 "trigger": round2(trigger),
+                "triggerCleared": trigger_cleared,
+                "nearTrigger": near_trigger,
+                "momentumActive": momentum_active,
                 "move1m": round2(move1m),
                 "move3m": round2(move3m),
                 "createdAt": int(time.time() * 1000),
             },
-            gate_key=f"server:direction20n:{symbol}:{side}:{state}",
+            gate_key=f"server:direction20n1:{symbol}:{side}:{state}",
             score=score,
-            cooldown_seconds=12 * 60 if confirmed else 8 * 60,
+            cooldown_seconds=10 * 60 if confirmed else 7 * 60,
             score_upgrade=8,
         )
     except Exception as exc:
-        _BACKGROUND_ATTENTION_STATUS["lastError"] = f"direction20n {symbol}: {exc}"
+        _BACKGROUND_ATTENTION_STATUS["lastError"] = f"direction20n1 {symbol}: {exc}"
 
 def _background_cas_scan(symbol, now_ts):
     """Closing-session review with verified futures required.
