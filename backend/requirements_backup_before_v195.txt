@@ -1,0 +1,15 @@
+flask
+flask-cors
+python-dotenv
+requests
+gunicorn
+fyers-apiv3
+pyotp
+flask-socketio
+eventlet
+gevent
+gevent-websocket
+pytz
+scipy
+ 
+simple-websocket

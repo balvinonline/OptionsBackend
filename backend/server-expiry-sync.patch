@@ -1,0 +1,669 @@
+--- /mnt/data/backend_review/server.py	2026-08-24 12:20:36.000000000 +0000
++++ /mnt/data/backend_patched/server.py	2026-08-26 09:28:52.106098931 +0000
+@@ -181,7 +181,7 @@
+             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
+     return jsonify({"success": False}), 401
+ 
+-SERVER_BUILD_MARKER = "backend-token-fast-20260817"
++SERVER_BUILD_MARKER = "backend-expiry-sync-20260826"
+ HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
+ HISTORY_STORE_LOCK = threading.Lock()
+ HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
+@@ -1547,9 +1547,9 @@
+ 
+ 
+ def build_trade_zones(spot, future, analytics, chain, history_snapshot=None):
+-    ref = safe_float((future or {}).get("ltp"), None)
++    ref = safe_float((spot or {}).get("ltp"), None)
+     if ref is None:
+-        ref = safe_float((spot or {}).get("ltp"), None)
++        ref = safe_float((future or {}).get("ltp"), None)
+ 
+     vwap = safe_float((analytics or {}).get("vwap"), None)
+     pcr = safe_float((analytics or {}).get("pcr"), None)
+@@ -2342,8 +2342,126 @@
+ 
+ 
+ _SUCCESSFUL_OC_SYMBOLS = {}
++_OPTION_EXPIRY_CACHE = {}
++_OPTION_EXPIRY_CACHE_TTL = 60
+ 
+-def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12):
++
++def _option_chain_data(raw):
++    if not isinstance(raw, dict):
++        return {}
++    data = raw.get("data", raw)
++    return data if isinstance(data, dict) else {}
++
++
++def normalize_expiry_date(value):
++    if value in (None, ""):
++        return None
++
++    text = str(value).strip()
++    if not text:
++        return None
++
++    if text.isdigit() and len(text) >= 9:
++        try:
++            return datetime.fromtimestamp(int(text), tz=IST).date().isoformat()
++        except Exception:
++            return None
++
++    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
++        try:
++            return datetime.strptime(text, fmt).date().isoformat()
++        except Exception:
++            pass
++    return None
++
++
++def extract_option_expiry_catalog(raw):
++    data = _option_chain_data(raw)
++    values = data.get("expiryData") or data.get("expiry_data") or []
++    if not isinstance(values, list):
++        return []
++
++    today = ist_now().date()
++    result = []
++    seen = set()
++
++    for item in values:
++        if not isinstance(item, dict):
++            continue
++
++        timestamp = item.get("expiry") or item.get("timestamp") or item.get("ts")
++        timestamp = str(timestamp).strip() if timestamp not in (None, "") else None
++        date_iso = normalize_expiry_date(item.get("date") or item.get("expiry_date") or timestamp)
++        if not date_iso:
++            continue
++
++        if date_iso in seen:
++            continue
++        seen.add(date_iso)
++
++        try:
++            expiry_date = datetime.strptime(date_iso, "%Y-%m-%d").date()
++            dte = max(0, (expiry_date - today).days)
++        except Exception:
++            dte = None
++
++        result.append({
++            "date": date_iso,
++            "timestamp": timestamp,
++            "type": str(item.get("expiry_flag") or item.get("type") or "").strip().upper() or None,
++            "dte": dte,
++        })
++
++    def sort_key(item):
++        ts = safe_int(item.get("timestamp"), None)
++        if ts is not None:
++            return (0, ts)
++        return (1, item.get("date") or "9999-12-31")
++
++    result.sort(key=sort_key)
++    return result
++
++
++def resolve_option_expiry(catalog, requested=None):
++    catalog = catalog or []
++    if not catalog:
++        return None
++
++    if requested in (None, ""):
++        return catalog[0]
++
++    requested_text = str(requested).strip()
++    requested_date = normalize_expiry_date(requested_text)
++
++    for item in catalog:
++        if requested_text and requested_text == str(item.get("timestamp") or ""):
++            return item
++        if requested_date and requested_date == item.get("date"):
++            return item
++
++    return None
++
++
++def get_option_expiry_catalog(symbol_key, cache_ttl=_OPTION_EXPIRY_CACHE_TTL, force=False):
++    key = normalize_symbol_key(symbol_key)
++    now = time.time()
++    cached = _OPTION_EXPIRY_CACHE.get(key)
++    if not force and cached and now - cached.get("ts", 0) <= cache_ttl:
++        return cached.get("data") or []
++
++    cfg = INDEX_MAP.get(key)
++    if not cfg:
++        return []
++
++    option_symbols = cfg.get("option_symbols") or [cfg.get("spot"), cfg.get("future")]
++    raw = get_option_chain_raw(option_symbols, cfg.get("future"), strikecount=1)
++    catalog = extract_option_expiry_catalog(raw)
++    if catalog:
++        _OPTION_EXPIRY_CACHE[key] = {"ts": now, "data": catalog}
++    return catalog
++
++
++def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12, expiry_timestamp=None):
+     refresh_fyers_from_env()
+     if not fyers:
+         return {}
+@@ -2362,7 +2480,7 @@
+             candidates.append(str(fallback_symbol).strip())
+ 
+     candidates = unique_symbols(candidates)
+-    
++
+     first_candidate = candidates[0] if candidates else "UNKNOWN"
+     if first_candidate in _SUCCESSFUL_OC_SYMBOLS:
+         successful_sym = _SUCCESSFUL_OC_SYMBOLS[first_candidate]
+@@ -2370,10 +2488,18 @@
+             candidates.remove(successful_sym)
+             candidates.insert(0, successful_sym)
+ 
++    try:
++        requested_count = int(strikecount or 12)
++    except Exception:
++        requested_count = 12
++    requested_count = max(1, min(50, requested_count))
++
+     for sym in candidates:
+         try:
+-            # Force 60 strikes to Fyers API to bypass BSE ATM bugs, we will slice in python
+-            payload = {"symbol": sym, "strikecount": 60}
++            payload = {"symbol": sym, "strikecount": requested_count}
++            if expiry_timestamp not in (None, "", 0, "0"):
++                payload["timestamp"] = str(expiry_timestamp)
++
+             resp = fyers.optionchain(payload)
+ 
+             if DEBUG_LOGS:
+@@ -2394,7 +2520,6 @@
+ 
+     return {}
+ 
+-
+ def detect_option_side(item, ce_obj, pe_obj):
+     if ce_obj:
+         return "CE"
+@@ -3061,9 +3186,9 @@
+         }
+ 
+ 
+-def enrich_chain_with_greeks(rows, spot_price, symbol_key):
++def enrich_chain_with_greeks(rows, spot_price, symbol_key, expiry_date=None):
+     S = safe_float(spot_price, None)
+-    T = get_years_to_expiry(symbol_key)
++    T = get_years_to_expiry(symbol_key, expiry_date=expiry_date)
+     r = 0.06
+ 
+     if S is None or S <= 0 or not rows:
+@@ -3095,7 +3220,6 @@
+ 
+     return rows
+ 
+-
+ def implied_volatility_from_price(option_type, market_price, S, K, T, r=0.06, max_iter=100, tol=1e-5):
+     market_price = safe_float(market_price, None)
+     S = safe_float(S, None)
+@@ -3143,42 +3267,27 @@
+     return round2(best_sigma * 100.0) if best_sigma is not None else None
+ 
+ 
+-def get_years_to_expiry(symbol_key):
+-    future_symbol = str(INDEX_MAP.get(symbol_key, {}).get("future", "")).upper()
+-
+-    month_map = {
+-        "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
+-        "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
+-        "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+-    }
+-
+-    expiry = None
+-
+-    for mon_text, mon_num in month_map.items():
+-        idx = future_symbol.find(mon_text)
+-        if idx != -1 and idx >= 2:
+-            yr_text = future_symbol[idx - 2:idx]
+-            if yr_text.isdigit():
+-                year = 2000 + int(yr_text)
+-                try:
+-                    expiry = datetime(year, mon_num, 28)
+-                    break
+-                except Exception:
+-                    expiry = None
+-
+-    if expiry is None:
+-        return 7 / 365.0
+-
+-    now = datetime.now()
+-    diff_days = (expiry - now).total_seconds() / 86400.0
+-    diff_days = max(diff_days, 1.0)
+-
+-    return diff_days / 365.0
++def get_years_to_expiry(symbol_key, expiry_date=None):
++    if expiry_date:
++        date_iso = normalize_expiry_date(expiry_date)
++        if date_iso:
++            try:
++                expiry_day = datetime.strptime(date_iso, "%Y-%m-%d").date()
++                expiry_dt = datetime.combine(expiry_day, dt_time(15, 30), tzinfo=IST)
++                remaining_seconds = (expiry_dt - ist_now()).total_seconds()
++                # Keep Black-Scholes numerically stable on 0-DTE while still reflecting intraday decay.
++                remaining_seconds = max(remaining_seconds, 3600.0)
++                return remaining_seconds / (365.0 * 86400.0)
++            except Exception:
++                pass
+ 
++    # If authoritative expiry metadata is unavailable, use a conservative one-week fallback.
++    # Do not manufacture an exact expiry from the monthly future symbol.
++    return 7 / 365.0
+ 
+-def enrich_chain_with_computed_iv(rows, spot_price, symbol_key):
++def enrich_chain_with_computed_iv(rows, spot_price, symbol_key, expiry_date=None):
+     S = safe_float(spot_price, None)
+-    T = get_years_to_expiry(symbol_key)
++    T = get_years_to_expiry(symbol_key, expiry_date=expiry_date)
+     r = 0.06
+ 
+     if S is None or S <= 0 or not rows:
+@@ -3190,26 +3299,12 @@
+             continue
+ 
+         if safe_float(row.get("ce_iv"), None) is None:
+-            ce_iv = implied_volatility_from_price(
+-                "CE",
+-                row.get("ce_ltp"),
+-                S,
+-                K,
+-                T,
+-                r=r
+-            )
++            ce_iv = implied_volatility_from_price("CE", row.get("ce_ltp"), S, K, T, r=r)
+             if ce_iv is not None:
+                 row["ce_iv"] = ce_iv
+ 
+         if safe_float(row.get("pe_iv"), None) is None:
+-            pe_iv = implied_volatility_from_price(
+-                "PE",
+-                row.get("pe_ltp"),
+-                S,
+-                K,
+-                T,
+-                r=r
+-            )
++            pe_iv = implied_volatility_from_price("PE", row.get("pe_ltp"), S, K, T, r=r)
+             if pe_iv is not None:
+                 row["pe_iv"] = pe_iv
+ 
+@@ -3220,6 +3315,7 @@
+         )
+ 
+     return rows
++
+ def _norm_pdf(x):
+     try:
+         return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+@@ -3305,9 +3401,9 @@
+         }
+ 
+ 
+-def enrich_chain_with_greeks(rows, spot_price, symbol_key):
++def enrich_chain_with_greeks(rows, spot_price, symbol_key, expiry_date=None):
+     S = safe_float(spot_price, None)
+-    T = get_years_to_expiry(symbol_key)
++    T = get_years_to_expiry(symbol_key, expiry_date=expiry_date)
+     r = 0.06
+ 
+     if S is None or S <= 0 or not rows:
+@@ -3339,7 +3435,6 @@
+ 
+     return rows
+ 
+-
+ def infer_spot_from_option_chain(rows):
+     candidates = []
+     for row in rows or []:
+@@ -3372,9 +3467,10 @@
+     return round2((values[mid - 1] + values[mid]) / 2)
+ 
+ 
+-def get_option_chain_rows_for_index(symbol_key, spot_price, cache_ttl=8, strikecount=30):
++def get_option_chain_rows_for_index(symbol_key, spot_price, cache_ttl=8, strikecount=30, expiry_timestamp=None, expiry_date=None):
+     cache_spot = round(safe_float(spot_price, 0) or 0)
+-    cache_key = f"{symbol_key}:{cache_spot}:{int(strikecount or 12)}"
++    expiry_key = str(expiry_timestamp or expiry_date or "front")
++    cache_key = f"{symbol_key}:{cache_spot}:{int(strikecount or 12)}:{expiry_key}"
+ 
+     cached = get_cached("option_chain", key=cache_key, ttl=cache_ttl)
+     if cached is not None:
+@@ -3382,10 +3478,20 @@
+ 
+     cfg = INDEX_MAP[symbol_key]
+     option_symbols = cfg.get("option_symbols") or [cfg["spot"], cfg["future"]]
+-    raw_oc = get_option_chain_raw(option_symbols, cfg["future"], strikecount=strikecount)
++    raw_oc = get_option_chain_raw(
++        option_symbols,
++        cfg["future"],
++        strikecount=strikecount,
++        expiry_timestamp=expiry_timestamp,
++    )
++
++    catalog = extract_option_expiry_catalog(raw_oc)
++    selected = resolve_option_expiry(catalog, expiry_timestamp or expiry_date)
++    selected_date = expiry_date or (selected or {}).get("date")
++    selected_ts = str(expiry_timestamp or (selected or {}).get("timestamp") or "").strip() or None
++
+     chain = parse_option_chain(raw_oc, spot_price)
+-    
+-    # Filter to exact strikecount centered around spot
++
+     if spot_price and chain and strikecount:
+         try:
+             chain = sorted(chain, key=lambda x: safe_float(x.get("strike"), 0) or 0)
+@@ -3397,18 +3503,24 @@
+         except Exception:
+             pass
+ 
+-    chain = enrich_chain_with_computed_iv(chain, spot_price, symbol_key)
+-    chain = enrich_chain_with_greeks(chain, spot_price, symbol_key)
++    chain = enrich_chain_with_computed_iv(chain, spot_price, symbol_key, expiry_date=selected_date)
++    chain = enrich_chain_with_greeks(chain, spot_price, symbol_key, expiry_date=selected_date)
++
++    for row in chain:
++        if selected_date:
++            row["expiry"] = selected_date
++        if selected_ts:
++            row["expiryTimestamp"] = selected_ts
+ 
+     if DEBUG_LOGS:
+         print(f"{symbol_key} option symbols tried: {option_symbols}")
++        print(f"{symbol_key} selected expiry: {selected_date or 'front'}")
+         print(f"{symbol_key} parsed chain rows: {len(chain)}")
+ 
+     result = (raw_oc, chain)
+     set_cached("option_chain", result, key=cache_key)
+     return result
+ 
+-
+ def normalize_future_against_spot(spot, future, max_abs_basis_pct=0.75):
+     spot_ltp = safe_float((spot or {}).get("ltp"), None)
+     future_ltp = safe_float((future or {}).get("ltp"), None)
+@@ -3440,8 +3552,9 @@
+     }
+ 
+ 
+-def build_dashboard(symbol_key, cache_ttl=10):
+-    cached = get_cached("dashboard", key=symbol_key, ttl=cache_ttl)
++def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date=None, expiry_catalog=None):
++    dashboard_cache_key = f"{symbol_key}:{expiry_timestamp or expiry_date or 'front'}"
++    cached = get_cached("dashboard", key=dashboard_cache_key, ttl=cache_ttl)
+     if cached is not None:
+         return cached
+ 
+@@ -3535,9 +3648,9 @@
+         )
+ 
+     reference_price_for_prev_day = (
+-        safe_float(future.get("ltp"), None)
+-        if safe_float(future.get("ltp"), None) is not None
+-        else safe_float(spot.get("ltp"), None)
++        safe_float(spot.get("ltp"), None)
++        if safe_float(spot.get("ltp"), None) is not None
++        else safe_float(future.get("ltp"), None)
+     )
+ 
+     previous_day_levels = enrich_previous_day_levels(
+@@ -3555,7 +3668,12 @@
+         future["change"] = round2(future_ltp - prev_close_for_change)
+         future["change_pct"] = round2(((future_ltp - prev_close_for_change) / prev_close_for_change) * 100)
+ 
+-    raw_oc, chain = get_option_chain_rows_for_index(symbol_key, spot_ltp)
++    raw_oc, chain = get_option_chain_rows_for_index(
++        symbol_key,
++        spot_ltp,
++        expiry_timestamp=expiry_timestamp,
++        expiry_date=expiry_date,
++    )
+     implied_spot = None
+     if spot_ltp is None:
+         implied_spot = infer_spot_from_option_chain(chain)
+@@ -3588,8 +3706,16 @@
+                     future["change"] = round2(future_ltp - prev_close_for_change)
+                     future["change_pct"] = round2(((future_ltp - prev_close_for_change) / prev_close_for_change) * 100)
+             chain = parse_option_chain(raw_oc, spot_ltp)
+-            chain = enrich_chain_with_computed_iv(chain, spot_ltp, symbol_key)
+-            chain = enrich_chain_with_greeks(chain, spot_ltp, symbol_key)
++            chain = enrich_chain_with_computed_iv(chain, spot_ltp, symbol_key, expiry_date=expiry_date)
++            chain = enrich_chain_with_greeks(chain, spot_ltp, symbol_key, expiry_date=expiry_date)
++
++    resolved_catalog = expiry_catalog or extract_option_expiry_catalog(raw_oc)
++    selected_expiry = resolve_option_expiry(resolved_catalog, expiry_timestamp or expiry_date)
++    if selected_expiry is None and resolved_catalog:
++        selected_expiry = resolved_catalog[0]
++    selected_expiry_date = (selected_expiry or {}).get("date") or normalize_expiry_date(expiry_date)
++    selected_expiry_timestamp = (selected_expiry or {}).get("timestamp") or (str(expiry_timestamp) if expiry_timestamp else None)
++    selected_dte = (selected_expiry or {}).get("dte")
+ 
+     if DEBUG_LOGS:
+         print(f"{symbol_key} option chain rows:", len(chain))
+@@ -3659,13 +3785,13 @@
+         "maxPain": max_pain,
+         "maxPainCurve": max_pain_curve,
+         "vwap": round2(clean_vwap_for_price(
+-            safe_float(future.get("vwap"), None)
+-            if safe_float(future.get("vwap"), None) is not None
+-            else safe_float(spot.get("vwap"), None),
++            safe_float(spot.get("vwap"), None)
++            if safe_float(spot.get("vwap"), None) is not None
++            else safe_float(future.get("vwap"), None),
+             spot_ltp or future_ltp,
+             max_distance_pct=2.25,
+         )),
+-        "vwapSource": future.get("vwap_source") or spot.get("vwap_source"),
++        "vwapSource": spot.get("vwap_source") or future.get("vwap_source"),
+         "previousDayLevels": previous_day_levels,
+         "previousDayOpen": previous_day_levels.get("open"),
+         "previousDayHigh": previous_day_levels.get("high"),
+@@ -3702,6 +3828,12 @@
+         "fiiDii": fetch_fii_derivatives_data(),
+     }
+ 
++    analytics["referencePrice"] = round2(spot_ltp if spot_ltp is not None else future_ltp)
++    analytics["referenceSource"] = "spot" if spot_ltp is not None else "future"
++    analytics["signalCalculatedAt"] = ist_now().isoformat()
++    analytics["selectedExpiry"] = selected_expiry_date
++    analytics["dte"] = selected_dte
++
+     analytics["tradeZones"] = build_trade_zones(spot, future, analytics, chain, history_snapshot)
+     analytics["tradeSignalPanel"] = build_trade_signal_panel(spot, future, analytics, ad)
+     analytics["tradeSignals"] = build_trade_signals(spot, future, analytics, ad)
+@@ -3727,10 +3859,20 @@
+         for r in chain
+     ]
+ 
++    expiry_dates = [item.get("date") for item in resolved_catalog if item.get("date")]
++
+     result = {
+         "symbol": symbol_key,
+         "label": cfg["label"],
+-        "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
++        "timestamp": ist_now().strftime("%d-%m-%Y %H:%M:%S"),
++        "signalCalculatedAt": analytics.get("signalCalculatedAt"),
++        "referencePrice": analytics.get("referencePrice"),
++        "referenceSource": analytics.get("referenceSource"),
++        "selectedExpiry": selected_expiry_date,
++        "selectedExpiryTimestamp": selected_expiry_timestamp,
++        "dte": selected_dte,
++        "expiries": expiry_dates,
++        "expiryDetails": resolved_catalog,
+         "spot": spot,
+         "future": future,
+         "vix": vix,
+@@ -3743,7 +3885,7 @@
+         "oiChart": oi_chart,
+     }
+ 
+-    set_cached("dashboard", result, key=symbol_key)
++    set_cached("dashboard", result, key=dashboard_cache_key)
+     return result
+ 
+ # =========================================================
+@@ -4220,9 +4362,9 @@
+ 
+ 
+ def build_breakout_breakdown(spot, future, levels):
+-    ref_price = safe_float(future.get("ltp"), None)
++    ref_price = safe_float(spot.get("ltp"), None)
+     if ref_price is None:
+-        ref_price = safe_float(spot.get("ltp"), None)
++        ref_price = safe_float(future.get("ltp"), None)
+ 
+     supports = levels.get("supports", []) or []
+     resistances = levels.get("resistances", []) or []
+@@ -4266,9 +4408,9 @@
+ 
+ 
+ def build_intraday_range_projection(spot, future, straddle):
+-    ref_price = safe_float(future.get("ltp"), None)
++    ref_price = safe_float(spot.get("ltp"), None)
+     if ref_price is None:
+-        ref_price = safe_float(spot.get("ltp"), None)
++        ref_price = safe_float(future.get("ltp"), None)
+ 
+     spot_high = safe_float(spot.get("high"), None)
+     spot_low = safe_float(spot.get("low"), None)
+@@ -4668,9 +4810,9 @@
+     dominance = analytics.get("callPutDominance", {})
+     sr = analytics.get("supportResistance", {})
+ 
+-    ref = safe_float(future.get("ltp"), None)
++    ref = safe_float(spot.get("ltp"), None)
+     if ref is None:
+-        ref = safe_float(spot.get("ltp"), None)
++        ref = safe_float(future.get("ltp"), None)
+ 
+     breakout_level = safe_float(breakout.get("breakoutLevel"), None)
+     breakdown_level = safe_float(breakout.get("breakdownLevel"), None)
+@@ -4818,7 +4960,7 @@
+     call_wall = safe_float(analytics.get("callWall"), None)
+     ad_ratio = safe_float(ad.get("ratio"), None)
+ 
+-    ref = fut_ltp if fut_ltp is not None else spot_ltp
++    ref = spot_ltp if spot_ltp is not None else fut_ltp
+ 
+     if breakout.get("signal") == "Breakout":
+         signals.append({
+@@ -6496,9 +6638,9 @@
+     ) or {}
+ 
+     reference_price_for_prev_day = (
+-        safe_float(future.get("ltp"), None)
+-        if safe_float(future.get("ltp"), None) is not None
+-        else safe_float(spot.get("ltp"), None)
++        safe_float(spot.get("ltp"), None)
++        if safe_float(spot.get("ltp"), None) is not None
++        else safe_float(future.get("ltp"), None)
+     )
+ 
+     previous_day_levels_raw = get_previous_day_levels(
+@@ -6536,9 +6678,9 @@
+         )
+ 
+     reference_price_for_prev_day = (
+-        safe_float(future.get("ltp"), None)
+-        if safe_float(future.get("ltp"), None) is not None
+-        else safe_float(spot.get("ltp"), None)
++        safe_float(spot.get("ltp"), None)
++        if safe_float(spot.get("ltp"), None) is not None
++        else safe_float(future.get("ltp"), None)
+     )
+ 
+     previous_day_levels = enrich_previous_day_levels(
+@@ -7928,18 +8070,71 @@
+         }), 500
+ 
+ 
++@app.route("/api/option-expiries")
++def option_expiries():
++    symbol = (request.args.get("symbol") or request.args.get("index") or "NIFTY").strip().upper()
++    if symbol not in INDEX_MAP:
++        return jsonify({"error": "Unsupported symbol", "symbol": symbol}), 400
++
++    try:
++        catalog = get_option_expiry_catalog(symbol)
++        selected = resolve_option_expiry(catalog)
++        return jsonify({
++            "symbol": symbol,
++            "selectedExpiry": (selected or {}).get("date"),
++            "selectedExpiryTimestamp": (selected or {}).get("timestamp"),
++            "dte": (selected or {}).get("dte"),
++            "expiries": [item.get("date") for item in catalog if item.get("date")],
++            "expiryDetails": catalog,
++            "timestamp": ist_now().strftime("%d-%m-%Y %H:%M:%S"),
++        })
++    except Exception as e:
++        print("option-expiries error:", e)
++        return jsonify({"error": str(e), "symbol": symbol}), 500
++
++
+ @app.route("/api/option-chain")
+ def option_chain():
+     symbol = (request.args.get("symbol") or request.args.get("index") or "NIFTY").strip().upper()
+     if symbol not in INDEX_MAP:
+-        symbol = "NIFTY"
++        return jsonify({"error": "Unsupported symbol", "symbol": symbol}), 400
++
++    requested_expiry = (request.args.get("expiry") or request.args.get("timestamp") or "").strip()
+ 
+     try:
+-        dashboard_data = build_dashboard(symbol)
++        selected = None
++        catalog = None
++        if requested_expiry:
++            catalog = get_option_expiry_catalog(symbol)
++            selected = resolve_option_expiry(catalog, requested_expiry)
++            if selected is None:
++                return jsonify({
++                    "error": "Requested expiry is not available",
++                    "symbol": symbol,
++                    "requestedExpiry": requested_expiry,
++                    "expiries": [item.get("date") for item in catalog if item.get("date")],
++                    "expiryDetails": catalog,
++                }), 400
++
++        dashboard_data = build_dashboard(
++            symbol,
++            expiry_timestamp=(selected or {}).get("timestamp"),
++            expiry_date=(selected or {}).get("date"),
++            expiry_catalog=catalog,
++        )
++
+         return jsonify({
+             "symbol": dashboard_data["symbol"],
+             "label": dashboard_data["label"],
+             "timestamp": dashboard_data["timestamp"],
++            "signalCalculatedAt": dashboard_data.get("signalCalculatedAt"),
++            "referencePrice": dashboard_data.get("referencePrice"),
++            "referenceSource": dashboard_data.get("referenceSource"),
++            "selectedExpiry": dashboard_data.get("selectedExpiry"),
++            "selectedExpiryTimestamp": dashboard_data.get("selectedExpiryTimestamp"),
++            "dte": dashboard_data.get("dte"),
++            "expiries": dashboard_data.get("expiries") or [],
++            "expiryDetails": dashboard_data.get("expiryDetails") or [],
+             "spot": dashboard_data["spot"],
+             "future": dashboard_data["future"],
+             "vix": dashboard_data["vix"],
+@@ -7954,10 +8149,9 @@
+         return jsonify({
+             "error": str(e),
+             "symbol": symbol,
+-            "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S")
++            "timestamp": ist_now().strftime("%d-%m-%Y %H:%M:%S")
+         }), 500
+ 
+-
+ @app.route("/api/debug/index")
+ def debug_index():
+     symbol = request.args.get("symbol", "NIFTY").strip().upper()
