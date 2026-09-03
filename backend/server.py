@@ -155,6 +155,12 @@ def setup_database():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_device_push_tokens_active ON device_push_tokens(active)")
+    # --- V2 FINAL INDEX ALERT PREFERENCES ---
+    cursor.execute("PRAGMA table_info(device_push_tokens)")
+    device_push_columns = {str(row[1]) for row in cursor.fetchall()}
+    if "alert_symbols" not in device_push_columns:
+        cursor.execute("ALTER TABLE device_push_tokens ADD COLUMN alert_symbols TEXT")
+    # --- END V2 FINAL INDEX ALERT PREFERENCES ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS server_alert_state (
             alert_key TEXT PRIMARY KEY,
@@ -225,6 +231,14 @@ def api_device_register():
     platform = str(payload.get('platform') or 'android').strip().lower()
     app_version = str(payload.get('appVersion') or '').strip()[:64]
     device_id = str(payload.get('deviceId') or '').strip()[:160] or None
+    allowed_alert_symbols = ("NIFTY", "BANKNIFTY", "SENSEX")
+    raw_alert_symbols = payload.get('alertSymbols')
+    if isinstance(raw_alert_symbols, list):
+        requested = {str(item or '').strip().upper() for item in raw_alert_symbols}
+        alert_symbols = [symbol for symbol in allowed_alert_symbols if symbol in requested]
+    else:
+        alert_symbols = list(allowed_alert_symbols)
+    alert_symbols_json = json.dumps(alert_symbols, separators=(",", ":"))
 
     if not valid_expo_push_token(token):
         return jsonify({"ok": False, "registered": False, "error": "Invalid Expo push token."}), 400
@@ -248,6 +262,7 @@ def api_device_register():
                 active=1,
                 updated_at=excluded.updated_at
         """, (token, platform, app_version, device_id, username, now_text, now_text))
+        cursor.execute("UPDATE device_push_tokens SET alert_symbols = ? WHERE token = ?", (alert_symbols_json, token))
         cursor.execute("SELECT id, updated_at FROM device_push_tokens WHERE token = ?", (token,))
         row = cursor.fetchone()
         conn.commit()
@@ -258,6 +273,8 @@ def api_device_register():
             "deviceId": row[0] if row else None,
             "updatedAt": row[1] if row else now_text,
             "remoteTestReady": True,
+            "alertSymbols": alert_symbols,
+            "supportsAlertSymbols": True,
             "serverMonitorEnabled": background_attention_monitor_enabled(),
             "build": SERVER_BUILD_MARKER,
         })
@@ -8833,12 +8850,28 @@ def _background_fast_move(symbol, history, now_ts):
     }
 
 
-def _background_active_tokens():
+def _background_active_tokens(symbol=None):
+    target = str(symbol or "").strip().upper()
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
         cursor = conn.cursor()
-        cursor.execute("SELECT token FROM device_push_tokens WHERE active = 1")
-        tokens = [str(row[0]).strip() for row in cursor.fetchall() if row and valid_expo_push_token(row[0])]
+        cursor.execute("SELECT token, alert_symbols FROM device_push_tokens WHERE active = 1")
+        tokens = []
+        for row in cursor.fetchall():
+            if not row or not valid_expo_push_token(row[0]):
+                continue
+            allowed = None
+            raw = row[1] if len(row) > 1 else None
+            if raw:
+                try:
+                    decoded = json.loads(raw)
+                    if isinstance(decoded, list):
+                        allowed = {str(item or "").strip().upper() for item in decoded}
+                except Exception:
+                    allowed = None
+            if target and allowed is not None and target not in allowed:
+                continue
+            tokens.append(str(row[0]).strip())
         conn.close()
         return list(dict.fromkeys(tokens))
     except Exception:
@@ -8874,7 +8907,7 @@ def _background_alert_gate(key, score=0, cooldown_seconds=600, score_upgrade=8):
 
 
 def _background_push_all(title, body, data, gate_key, score=0, cooldown_seconds=600, score_upgrade=8):
-    tokens = _background_active_tokens()
+    tokens = _background_active_tokens((data or {}).get("symbol"))
     if not tokens:
         return False
     if not _background_alert_gate(gate_key, score, cooldown_seconds, score_upgrade):
