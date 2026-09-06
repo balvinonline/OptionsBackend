@@ -13,4 +13,4 @@ pytz
 scipy
  
 simple-websocket
-
+kotakneoapi==3.0.1
