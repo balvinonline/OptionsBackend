@@ -11,6 +11,9 @@ gevent
 gevent-websocket
 pytz
 scipy
- 
 simple-websocket
-kotakneoapi==3.0.1
+httpx[http2]
+PyJWT
+structlog
+python-decouple
+pydantic
