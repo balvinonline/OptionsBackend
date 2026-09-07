@@ -97,8 +97,6 @@ def _get_totp_secret() -> str:
         "KOTAK_NEO_TOTP",
         "KOTAK_TOTP",
         "KOTAK_SECRET_KEY",
-        "TOTP_KEY",
-        "TOTP_SECRET",
         "NEO_TOTP",
         "NEO_TOTP_KEY",
         "NEO_TOTP_SECRET",
@@ -110,10 +108,12 @@ def _get_totp_secret() -> str:
         val = os.getenv(var, "").replace(" ", "").strip()
         if val:
             return val
-    # Dynamic scan: find any env var whose name has TOTP or (KOTAK and SECRET) with secret key length (>= 14)
+    # Dynamic scan: MUST NOT match FYERS, and MUST contain KOTAK or NEO
     for k, v in os.environ.items():
         k_upper = k.upper()
-        if ("TOTP" in k_upper) or ("KOTAK" in k_upper and "SECRET" in k_upper):
+        if "FYERS" in k_upper:
+            continue
+        if ("KOTAK" in k_upper or "NEO" in k_upper) and ("TOTP" in k_upper or "SECRET" in k_upper):
             cleaned = v.replace(" ", "").strip()
             if len(cleaned) >= 14:
                 return cleaned
@@ -127,11 +127,18 @@ def _get_mpin_from_env() -> str:
         "NEO_MPIN",
         "KOTAK_PIN",
         "KOTAK_NEO_PIN",
-        "MPIN",
     ]:
         val = os.getenv(var, "").strip()
         if val:
             return val
+    for k, v in os.environ.items():
+        k_upper = k.upper()
+        if "FYERS" in k_upper:
+            continue
+        if ("KOTAK" in k_upper or "NEO" in k_upper) and ("MPIN" in k_upper or "PIN" in k_upper):
+            cleaned = v.strip()
+            if len(cleaned) in {4, 6} and cleaned.isdigit():
+                return cleaned
     return ""
 
 
@@ -207,7 +214,7 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
     if len(totp_val) < 6:
         raise ValueError("TOTP is missing or invalid. Provide a 6-digit TOTP code or configure KOTAK_NEO_TOTP_KEY on the backend.")
     if len(mpin_val) < 4:
-        raise ValueError("MPIN is missing. Provide your Kotak MPIN or configure KOTAK_NEO_MPIN on the backend.")
+        raise ValueError("MPIN is missing. Provide your 6-digit Kotak Neo MPIN or configure KOTAK_NEO_MPIN on the backend.")
 
     with _KOTAK_LOCK:
         client = _new_kotak_client()
@@ -219,23 +226,36 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
             mobile = f"+91{mobile}"
         elif len(mobile) == 12 and mobile.startswith("91") and mobile.isdigit():
             mobile = f"+{mobile}" 
+
         login_resp = client.totp_login(
             mobile_number=mobile,
             ucc=ucc,
             totp=totp_val,
         )
+
+        # Verify Step 1 (TOTP Login) succeeded and view_token was set
+        view_token = getattr(client.configuration, "view_token", None)
+        if not view_token or not isinstance(login_resp, dict) or not login_resp.get("data"):
+            _KOTAK_SESSION_READY = False
+            _KOTAK_CLIENT = None
+            err_msg = ""
+            if isinstance(login_resp, dict):
+                err_msg = login_resp.get("message") or (login_resp.get("error", [{}])[0].get("message") if isinstance(login_resp.get("error"), list) and login_resp.get("error") else str(login_resp))
+            raise ValueError(f"Kotak Neo Step 1 (TOTP) failed: {err_msg or 'Invalid TOTP code or mobile/UCC. Please check your authenticator code.'}")
+
+        # Step 2: Validate MPIN (Kotak Neo uses a 6-digit MPIN)
         validate_resp = client.totp_validate(mpin=mpin_val)
-        
-        # Verify trading permissions (edit_token and edit_sid) were obtained
-        if not getattr(client.configuration, "edit_token", None) or not getattr(client.configuration, "edit_sid", None):
+
+        # Verify Step 2 (Trading Session Token) succeeded
+        edit_token = getattr(client.configuration, "edit_token", None)
+        edit_sid = getattr(client.configuration, "edit_sid", None)
+        if not edit_token or not edit_sid:
             _KOTAK_SESSION_READY = False
             _KOTAK_CLIENT = None
             err_msg = ""
             if isinstance(validate_resp, dict):
-                err_msg = validate_resp.get("message") or (validate_resp.get("error", [{}])[0].get("message") if isinstance(validate_resp.get("error"), list) and validate_resp.get("error") else None)
-            if not err_msg and isinstance(login_resp, dict):
-                err_msg = login_resp.get("message") or (login_resp.get("error", [{}])[0].get("message") if isinstance(login_resp.get("error"), list) and login_resp.get("error") else None)
-            raise ValueError(f"Kotak Neo 2FA failed: {err_msg or 'Invalid TOTP or MPIN. Please enter fresh 6-digit TOTP and 4-digit MPIN.'}")
+                err_msg = validate_resp.get("message") or (validate_resp.get("error", [{}])[0].get("message") if isinstance(validate_resp.get("error"), list) and validate_resp.get("error") else str(validate_resp))
+            raise ValueError(f"Kotak Neo Step 2 (MPIN) failed: {err_msg or 'Invalid MPIN. Please enter your 6-digit Kotak Neo MPIN.'}")
 
         _KOTAK_CLIENT = client
         _KOTAK_SESSION_READY = True
