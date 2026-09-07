@@ -296,7 +296,8 @@ def _resolve_kotak_contract(client, payload):
         # Fallback monthly or standard format
         algo_symbol = f"{underlying}{expiry[:2]}{strike_str}{option_type}"
 
-    lot = 75 if underlying == "NIFTY" else (30 if underlying == "BANKNIFTY" else 10)
+    lot_map = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20, "FINNIFTY": 60, "MIDCPNIFTY": 120}
+    lot = lot_map.get(underlying, 65)
     return {
         "tradingSymbol": algo_symbol,
         "exchangeSegment": exchange,
@@ -480,13 +481,24 @@ def register_optionsdesk_v195_routes(app):
                     disclosed_quantity="0",
                     trigger_price=str(body.get("triggerPrice") or "0"),
                 )
-            stat = str((response or {}).get("stat") or "").lower() if isinstance(response, dict) else ""
-            if stat and stat not in {"ok", "success"}:
+            resp_dict = response if isinstance(response, dict) else {}
+            err_val = resp_dict.get("Error") or resp_dict.get("Error Message") or resp_dict.get("errMsg")
+            stat = str(resp_dict.get("stat") or "").lower()
+
+            if err_val or (stat and stat not in {"ok", "success"}):
                 _RECENT_ORDER_IDS.pop(client_order_id, None)
-                err_msg = (response or {}).get("errMsg") or (response or {}).get("message") or "Kotak Neo rejected the order"
-                return jsonify({"ok": False, "error": str(err_msg), "data": response}), 400
+                err_msg = str(err_val or resp_dict.get("message") or "Kotak Neo rejected the order")
+                return jsonify({"ok": False, "error": err_msg, "data": resp_dict}), 400
+
+            order_no = resp_dict.get("nOrdNo") or resp_dict.get("orderId") or client_order_id
             _DAILY_ORDER_COUNT["count"] += 1
-            return jsonify({"ok": True, "message": "Live order sent to Kotak Neo", "tradingSymbol": trading_symbol, "data": response})
+            return jsonify({
+                "ok": True,
+                "message": f"Live order accepted by Kotak Neo (Order #{order_no})",
+                "orderNumber": str(order_no),
+                "tradingSymbol": trading_symbol,
+                "data": resp_dict,
+            })
         except Exception as exc:
             _RECENT_ORDER_IDS.pop(client_order_id, None)
             return jsonify({"ok": False, "error": str(exc)}), 400
