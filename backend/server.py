@@ -376,7 +376,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "v2.0.20n1-option-buyer-rebalance-20260903"
+SERVER_BUILD_MARKER = "v2.0.20n3-kotak-zero-download-20260907"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
