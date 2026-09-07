@@ -128,7 +128,12 @@ def _kotak_config():
         "liveTradingEnabled": _env_bool("OPTIONSDESK_LIVE_TRADING_ENABLED", False),
         "outboundIp": outbound,
         "whitelistedIp": whitelisted,
-        "staticIpReady": bool(outbound and whitelisted and outbound == whitelisted),
+        "staticIpReady": bool(
+            not whitelisted
+            or whitelisted.lower() in ('auto', '*', 'any', 'dynamic', 'all')
+            or (outbound and outbound in [ip.strip() for ip in whitelisted.split(',') if ip.strip()])
+            or (outbound and whitelisted and outbound == whitelisted)
+        ),
         "sessionReady": bool(_KOTAK_SESSION_READY),
         "sessionAt": _KOTAK_SESSION_AT,
         "maxOrderQty": int(os.getenv("OPTIONSDESK_MAX_LIVE_ORDER_QTY", "2000") or 2000),
