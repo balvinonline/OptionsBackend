@@ -134,7 +134,7 @@ def _kotak_config():
             or (outbound and outbound in [ip.strip() for ip in whitelisted.split(',') if ip.strip()])
             or (outbound and whitelisted and outbound == whitelisted)
         ),
-        "sessionReady": bool(_KOTAK_SESSION_READY),
+        "sessionReady": bool(_KOTAK_SESSION_READY and _KOTAK_CLIENT and getattr(_KOTAK_CLIENT.configuration, "edit_token", None)),
         "sessionAt": _KOTAK_SESSION_AT,
         "maxOrderQty": int(os.getenv("OPTIONSDESK_MAX_LIVE_ORDER_QTY", "2000") or 2000),
         "maxOrderValue": float(os.getenv("OPTIONSDESK_MAX_LIVE_ORDER_VALUE", "300000") or 300000),
@@ -180,6 +180,18 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
             totp=totp_val,
         )
         validate_resp = client.totp_validate(mpin=mpin_val)
+        
+        # Verify trading permissions (edit_token and edit_sid) were obtained
+        if not getattr(client.configuration, "edit_token", None) or not getattr(client.configuration, "edit_sid", None):
+            _KOTAK_SESSION_READY = False
+            _KOTAK_CLIENT = None
+            err_msg = ""
+            if isinstance(validate_resp, dict):
+                err_msg = validate_resp.get("message") or (validate_resp.get("error", [{}])[0].get("message") if isinstance(validate_resp.get("error"), list) and validate_resp.get("error") else None)
+            if not err_msg and isinstance(login_resp, dict):
+                err_msg = login_resp.get("message") or (login_resp.get("error", [{}])[0].get("message") if isinstance(login_resp.get("error"), list) and login_resp.get("error") else None)
+            raise ValueError(f"Kotak Neo 2FA failed: {err_msg or 'Invalid TOTP or MPIN. Please enter fresh 6-digit TOTP and 4-digit MPIN.'}")
+
         _KOTAK_CLIENT = client
         _KOTAK_SESSION_READY = True
         _KOTAK_SESSION_AT = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
