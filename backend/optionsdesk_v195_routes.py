@@ -88,29 +88,68 @@ def _outbound_ip():
     return value
 
 
+def _get_totp_secret() -> str:
+    known_vars = [
+        "KOTAK_NEO_TOTP_KEY",
+        "KOTAK_NEO_TOTP_SECRET",
+        "KOTAK_TOTP_SECRET",
+        "KOTAK_TOTP_KEY",
+        "KOTAK_NEO_TOTP",
+        "KOTAK_TOTP",
+        "KOTAK_SECRET_KEY",
+        "TOTP_KEY",
+        "TOTP_SECRET",
+        "NEO_TOTP",
+        "NEO_TOTP_KEY",
+        "NEO_TOTP_SECRET",
+        "KOTAK_NEO_SECRET",
+        "KOTAK_NEO_API_TOTP",
+        "NEO_TOTP_TOKEN",
+    ]
+    for var in known_vars:
+        val = os.getenv(var, "").replace(" ", "").strip()
+        if val:
+            return val
+    # Dynamic scan: find any env var whose name has TOTP or (KOTAK and SECRET) with secret key length (>= 14)
+    for k, v in os.environ.items():
+        k_upper = k.upper()
+        if ("TOTP" in k_upper) or ("KOTAK" in k_upper and "SECRET" in k_upper):
+            cleaned = v.replace(" ", "").strip()
+            if len(cleaned) >= 14:
+                return cleaned
+    return ""
+
+
+def _get_mpin_from_env() -> str:
+    for var in [
+        "KOTAK_NEO_MPIN",
+        "KOTAK_MPIN",
+        "NEO_MPIN",
+        "KOTAK_PIN",
+        "KOTAK_NEO_PIN",
+        "MPIN",
+    ]:
+        val = os.getenv(var, "").strip()
+        if val:
+            return val
+    return ""
+
+
 def _get_auto_totp() -> str:
-    secret = (
-        os.getenv("KOTAK_NEO_TOTP_KEY", "")
-        or os.getenv("KOTAK_NEO_TOTP_SECRET", "")
-        or os.getenv("KOTAK_TOTP_SECRET", "")
-    ).replace(" ", "").strip()
+    secret = _get_totp_secret()
     if not secret:
         return ""
     try:
         import pyotp
-        return str(pyotp.TOTP(secret).now()).strip()
-    except Exception:
+        clean_secret = secret.replace(" ", "").strip().upper()
+        return str(pyotp.TOTP(clean_secret).now()).strip()
+    except Exception as e:
+        logger.warning(f"Could not calculate TOTP from secret key: {e}")
         return ""
 
 
 def _is_auto_totp_configured() -> bool:
-    has_totp_secret = bool(
-        (os.getenv("KOTAK_NEO_TOTP_KEY", "")
-         or os.getenv("KOTAK_NEO_TOTP_SECRET", "")
-         or os.getenv("KOTAK_TOTP_SECRET", "")).strip()
-    )
-    has_mpin = bool((os.getenv("KOTAK_NEO_MPIN", "") or os.getenv("KOTAK_MPIN", "")).strip())
-    return bool(has_totp_secret and has_mpin)
+    return bool(_get_totp_secret() and _get_mpin_from_env())
 
 
 def _kotak_config():
@@ -125,6 +164,8 @@ def _kotak_config():
     return {
         "configured": configured,
         "autoTotpConfigured": auto_totp_ready,
+        "totpKeyConfigured": bool(_get_totp_secret()),
+        "mpinConfigured": bool(_get_mpin_from_env()),
         "liveTradingEnabled": _env_bool("OPTIONSDESK_LIVE_TRADING_ENABLED", False),
         "outboundIp": outbound,
         "whitelistedIp": whitelisted,
@@ -161,7 +202,7 @@ def _new_kotak_client():
 def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
     global _KOTAK_CLIENT, _KOTAK_SESSION_READY, _KOTAK_SESSION_AT
     totp_val = str(totp or "").strip() or _get_auto_totp()
-    mpin_val = str(mpin or "").strip() or (os.getenv("KOTAK_NEO_MPIN", "") or os.getenv("KOTAK_MPIN", "")).strip()
+    mpin_val = str(mpin or "").strip() or _get_mpin_from_env()
 
     if len(totp_val) < 6:
         raise ValueError("TOTP is missing or invalid. Provide a 6-digit TOTP code or configure KOTAK_NEO_TOTP_KEY on the backend.")
@@ -174,6 +215,10 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
         ucc = os.getenv("KOTAK_NEO_UCC", "").strip()
         if not mobile or not ucc:
             raise ValueError("KOTAK_NEO_MOBILE and KOTAK_NEO_UCC must be configured.")
+        if len(mobile) == 10 and mobile.isdigit():
+            mobile = f"+91{mobile}"
+        elif len(mobile) == 12 and mobile.startswith("91") and mobile.isdigit():
+            mobile = f"+{mobile}" 
         login_resp = client.totp_login(
             mobile_number=mobile,
             ucc=ucc,
