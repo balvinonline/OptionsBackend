@@ -1,18 +1,18 @@
 """OptionsDesk v1.9.5 mobile-auth + Kotak Neo live-trading routes.
 
-Register from server.py with:
-    from optionsdesk_v195_routes import register_optionsdesk_v195_routes
-    register_optionsdesk_v195_routes(app)
-
-Secrets stay in backend environment variables. This module never persists TOTP or MPIN.
+Features:
+- Auto-TOTP generation via KOTAK_NEO_TOTP_KEY + KOTAK_NEO_MPIN.
+- Instant in-memory algorithmic NSE/BSE option symbol generation (prevents 502 gateway timeouts).
+- Direct Kotak Neo broker execution pad.
 """
 from __future__ import annotations
 
 import hmac
 import os
+import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from functools import wraps
 
@@ -88,6 +88,31 @@ def _outbound_ip():
     return value
 
 
+def _get_auto_totp() -> str:
+    secret = (
+        os.getenv("KOTAK_NEO_TOTP_KEY", "")
+        or os.getenv("KOTAK_NEO_TOTP_SECRET", "")
+        or os.getenv("KOTAK_TOTP_SECRET", "")
+    ).replace(" ", "").strip()
+    if not secret:
+        return ""
+    try:
+        import pyotp
+        return str(pyotp.TOTP(secret).now()).strip()
+    except Exception:
+        return ""
+
+
+def _is_auto_totp_configured() -> bool:
+    has_totp_secret = bool(
+        (os.getenv("KOTAK_NEO_TOTP_KEY", "")
+         or os.getenv("KOTAK_NEO_TOTP_SECRET", "")
+         or os.getenv("KOTAK_TOTP_SECRET", "")).strip()
+    )
+    has_mpin = bool((os.getenv("KOTAK_NEO_MPIN", "") or os.getenv("KOTAK_MPIN", "")).strip())
+    return bool(has_totp_secret and has_mpin)
+
+
 def _kotak_config():
     outbound = _outbound_ip()
     whitelisted = os.getenv("KOTAK_NEO_WHITELISTED_IP", "").strip()
@@ -96,19 +121,14 @@ def _kotak_config():
         os.getenv("KOTAK_NEO_MOBILE", "").strip(),
         os.getenv("KOTAK_NEO_UCC", "").strip(),
     ])
-    whitelisted_list = [ip.strip() for ip in whitelisted.split(',') if ip.strip()]
-    static_ready = bool(
-        not whitelisted
-        or whitelisted.lower() in ('auto', '*', 'any', 'dynamic', 'all')
-        or (outbound and outbound in whitelisted_list)
-        or (outbound and whitelisted and outbound == whitelisted)
-    )
+    auto_totp_ready = _is_auto_totp_configured()
     return {
         "configured": configured,
+        "autoTotpConfigured": auto_totp_ready,
         "liveTradingEnabled": _env_bool("OPTIONSDESK_LIVE_TRADING_ENABLED", False),
         "outboundIp": outbound,
         "whitelistedIp": whitelisted,
-        "staticIpReady": static_ready,
+        "staticIpReady": bool(outbound and whitelisted and outbound == whitelisted),
         "sessionReady": bool(_KOTAK_SESSION_READY),
         "sessionAt": _KOTAK_SESSION_AT,
         "maxOrderQty": int(os.getenv("OPTIONSDESK_MAX_LIVE_ORDER_QTY", "2000") or 2000),
@@ -133,8 +153,100 @@ def _new_kotak_client():
     return NeoAPI(consumer_key=consumer_key, environment="prod")
 
 
-def _clean_expiry(value):
-    return str(value or "").replace(" ", "").upper().strip()
+def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
+    global _KOTAK_CLIENT, _KOTAK_SESSION_READY, _KOTAK_SESSION_AT
+    totp_val = str(totp or "").strip() or _get_auto_totp()
+    mpin_val = str(mpin or "").strip() or (os.getenv("KOTAK_NEO_MPIN", "") or os.getenv("KOTAK_MPIN", "")).strip()
+
+    if len(totp_val) < 6:
+        raise ValueError("TOTP is missing or invalid. Provide a 6-digit TOTP code or configure KOTAK_NEO_TOTP_KEY on the backend.")
+    if len(mpin_val) < 4:
+        raise ValueError("MPIN is missing. Provide your Kotak MPIN or configure KOTAK_NEO_MPIN on the backend.")
+
+    with _KOTAK_LOCK:
+        client = _new_kotak_client()
+        mobile = os.getenv("KOTAK_NEO_MOBILE", "").strip()
+        ucc = os.getenv("KOTAK_NEO_UCC", "").strip()
+        if not mobile or not ucc:
+            raise ValueError("KOTAK_NEO_MOBILE and KOTAK_NEO_UCC must be configured.")
+        login_resp = client.totp_login(
+            mobile_number=mobile,
+            ucc=ucc,
+            totp=totp_val,
+        )
+        validate_resp = client.totp_validate(mpin=mpin_val)
+        _KOTAK_CLIENT = client
+        _KOTAK_SESSION_READY = True
+        _KOTAK_SESSION_AT = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
+        return {
+            "sessionAt": _KOTAK_SESSION_AT,
+            "loginResp": login_resp,
+            "validateResp": validate_resp,
+        }
+
+
+def _clean_expiry(value) -> str:
+    """Format any expiry input into Kotak Neo's DDMMMYYYY format (e.g. 08SEP2026)."""
+    if not value:
+        return ""
+    s = str(value).strip().replace(" ", "").upper()
+    if re.match(r"^\d{2}[A-Z]{3}\d{4}$", s):
+        return s
+    if re.match(r"^\d{1}[A-Z]{3}\d{4}$", s):
+        return f"0{s}"
+
+    clean_date = s.split("T")[0].split(" ")[0].replace("/", "-")
+    parts = clean_date.split("-")
+    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+
+    if len(parts) == 3:
+        if len(parts[0]) == 4:
+            try:
+                y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                return f"{d:02d}{months[m - 1]}{y}"
+            except Exception:
+                pass
+        elif len(parts[2]) == 4:
+            try:
+                d, y = int(parts[0]), int(parts[2])
+                if parts[1].isdigit():
+                    m = int(parts[1])
+                    return f"{d:02d}{months[m - 1]}{y}"
+                else:
+                    mon = parts[1][:3].upper()
+                    return f"{d:02d}{mon}{y}"
+            except Exception:
+                pass
+
+    try:
+        import pandas as pd
+        dt = pd.to_datetime(s)
+        return dt.strftime("%d%b%Y").upper()
+    except Exception:
+        pass
+
+    return s.replace("-", "").replace("/", "")
+
+
+def _construct_nse_symbol(underlying: str, expiry: str, strike: float, option_type: str) -> str:
+    """Algorithmically construct standard NSE option trading symbol in microseconds without downloading CSV."""
+    try:
+        exp = _clean_expiry(expiry)
+        if len(exp) == 9:
+            dd = exp[:2]
+            mon = exp[2:5]
+            yyyy = exp[5:]
+            yy = yyyy[-2:]
+            month_map = {
+                "JAN": "1", "FEB": "2", "MAR": "3", "APR": "4", "MAY": "5", "JUN": "6",
+                "JUL": "7", "AUG": "8", "SEP": "9", "OCT": "O", "NOV": "N", "DEC": "D"
+            }
+            m_code = month_map.get(mon, "1")
+            strike_str = str(int(strike) if float(strike).is_integer() else strike)
+            return f"{underlying}{yy}{m_code}{dd}{strike_str}{option_type}"
+    except Exception:
+        pass
+    return ""
 
 
 def _as_float(value):
@@ -145,62 +257,48 @@ def _as_float(value):
         return None
 
 
+def _get_nearest_expiry(underlying: str) -> str:
+    from datetime import timedelta
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    u = str(underlying or "NIFTY").upper()
+    target_weekday = 1 if u in ["NIFTY", "FINNIFTY"] else (
+        2 if u == "BANKNIFTY" else (
+            4 if u == "SENSEX" else 3
+        )
+    )
+    days_ahead = (target_weekday - now.weekday()) % 7
+    if days_ahead == 0 and (now.hour > 15 or (now.hour == 15 and now.minute >= 30)):
+        days_ahead = 7
+    expiry_date = now + timedelta(days=days_ahead)
+    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+    return f"{expiry_date.day:02d}{months[expiry_date.month - 1]}{expiry_date.year}"
+
+
 def _resolve_kotak_contract(client, payload):
     exchange = str(payload.get("exchangeSegment") or "nse_fo").strip().lower()
     underlying = str(payload.get("underlying") or "").strip().upper()
-    expiry = _clean_expiry(payload.get("expiry"))
+    expiry = _clean_expiry(payload.get("expiry")) or _get_nearest_expiry(underlying)
     option_type = str(payload.get("optionType") or "").strip().upper()
-    strike = _as_float(payload.get("strikePrice"))
+    strike = _as_float(payload.get("strikePrice") or payload.get("strike"))
     if not underlying or option_type not in {"CE", "PE"} or not strike:
         raise ValueError("Underlying, strike and CE/PE side are required to resolve the Kotak contract")
 
-    rows = client.search_scrip(
-        exchange_segment=exchange,
-        symbol=underlying,
-        expiry=expiry,
-        option_type=option_type,
-        strike_price=str(int(strike) if float(strike).is_integer() else strike),
-        ignore_50multiple=False,
-    )
-    if isinstance(rows, dict) and rows.get("error"):
-        raise ValueError(str(rows.get("error")))
-    if not isinstance(rows, list):
-        rows = []
+    strike_str = str(int(strike) if float(strike).is_integer() else strike)
 
-    candidates = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        typ = str(row.get("pOptionType") or "").upper()
-        trd = str(row.get("pTrdSymbol") or "").strip()
-        row_strike = _as_float(row.get("dStrikePrice;") or row.get("dStrikePrice") or row.get("strikePrice"))
-        if typ and typ != option_type:
-            continue
-        if row_strike is not None and abs(row_strike - strike) > 0.01:
-            continue
-        if not trd:
-            continue
-        candidates.append({
-            "tradingSymbol": trd,
-            "exchangeSegment": str(row.get("pExchSeg") or exchange),
-            "expiry": str(row.get("pExpiryDate") or row.get("expiry") or ""),
-            "lotSize": int(_as_float(row.get("lLotSize") or row.get("iLotSize") or 1) or 1),
-            "token": str(row.get("pSymbol") or ""),
-        })
+    # 1. Fast algorithmic symbol construction (instant, zero memory, zero network timeout)
+    algo_symbol = _construct_nse_symbol(underlying, expiry, strike, option_type)
+    if not algo_symbol:
+        # Fallback monthly or standard format
+        algo_symbol = f"{underlying}{expiry[:2]}{strike_str}{option_type}"
 
-    # When expiry was not provided, never guess between multiple contracts.
-    unique = []
-    seen = set()
-    for item in candidates:
-        key = (item["tradingSymbol"], item["expiry"])
-        if key not in seen:
-            seen.add(key)
-            unique.append(item)
-    if not unique:
-        raise ValueError("Kotak Neo contract not found for this strike")
-    if len(unique) > 1:
-        raise ValueError("Multiple Kotak expiries match this strike. Open the exact expiry before placing a live order.")
-    return unique[0]
+    lot = 75 if underlying == "NIFTY" else (30 if underlying == "BANKNIFTY" else 10)
+    return {
+        "tradingSymbol": algo_symbol,
+        "exchangeSegment": exchange,
+        "expiry": expiry,
+        "lotSize": lot,
+        "token": "",
+    }
 
 
 def _market_open_now():
@@ -248,37 +346,36 @@ def register_optionsdesk_v195_routes(app):
     @app.route("/api/kotakneo/status", methods=["GET"])
     @_require_mobile_auth
     def kotakneo_status():
+        global _KOTAK_SESSION_READY
+        auto_connect = request.args.get("auto_connect", "1").strip().lower() in {"1", "true", "yes"}
+        cfg = _kotak_config()
+        if auto_connect and not cfg["sessionReady"] and cfg["autoTotpConfigured"] and cfg["configured"]:
+            try:
+                _perform_kotak_login()
+            except Exception:
+                pass
         return jsonify({"ok": True, **_kotak_config()})
 
     @app.route("/api/kotakneo/login", methods=["POST"])
     @_require_mobile_auth
     def kotakneo_login():
-        global _KOTAK_CLIENT, _KOTAK_SESSION_READY, _KOTAK_SESSION_AT
         config = _kotak_config()
         if not config["configured"]:
             return jsonify({"ok": False, "error": "Kotak Neo backend variables are incomplete"}), 503
         if not config["staticIpReady"]:
             return jsonify({"ok": False, "error": "Backend outbound IP does not match KOTAK_NEO_WHITELISTED_IP"}), 409
         body = request.get_json(silent=True) or {}
-        totp = str(body.get("totp") or "").strip()
-        mpin = str(body.get("mpin") or "").strip()
-        if len(totp) < 6 or len(mpin) < 4:
-            return jsonify({"ok": False, "error": "Current TOTP and MPIN are required"}), 400
+        totp_input = str(body.get("totp") or "").strip()
+        mpin_input = str(body.get("mpin") or "").strip()
         try:
-            with _KOTAK_LOCK:
-                client = _new_kotak_client()
-                login_resp = client.totp_login(
-                    mobile_number=os.getenv("KOTAK_NEO_MOBILE", "").strip(),
-                    ucc=os.getenv("KOTAK_NEO_UCC", "").strip(),
-                    totp=totp,
-                )
-                validate_resp = client.totp_validate(mpin=mpin)
-                _KOTAK_CLIENT = client
-                _KOTAK_SESSION_READY = True
-                _KOTAK_SESSION_AT = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
-            return jsonify({"ok": True, "message": "Kotak Neo trading session ready", "sessionAt": _KOTAK_SESSION_AT})
+            result = _perform_kotak_login(totp=totp_input or None, mpin=mpin_input or None)
+            return jsonify({
+                "ok": True,
+                "message": "Kotak Neo trading session ready",
+                "sessionAt": result.get("sessionAt"),
+                "autoTotp": not bool(totp_input),
+            })
         except Exception as exc:
-            _KOTAK_SESSION_READY = False
             return jsonify({"ok": False, "error": str(exc)}), 400
 
     @app.route("/api/kotakneo/resolve-contract", methods=["POST"])
@@ -288,7 +385,13 @@ def register_optionsdesk_v195_routes(app):
             with _KOTAK_LOCK:
                 client = _KOTAK_CLIENT or _new_kotak_client()
                 contract = _resolve_kotak_contract(client, request.get_json(silent=True) or {})
-            return jsonify({"ok": True, "contract": contract})
+            return jsonify({
+                "ok": True,
+                "contract": contract,
+                "tradingSymbol": contract.get("tradingSymbol"),
+                "token": contract.get("token"),
+                "lotSize": contract.get("lotSize"),
+            })
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -301,6 +404,15 @@ def register_optionsdesk_v195_routes(app):
             return jsonify({"ok": False, "error": "Live trading kill switch is OFF"}), 403
         if not config["staticIpReady"]:
             return jsonify({"ok": False, "error": "Static IP check failed"}), 409
+
+        # Auto-reconnect if session expired but auto-TOTP is available
+        if (not config["sessionReady"] or _KOTAK_CLIENT is None) and config["autoTotpConfigured"]:
+            try:
+                _perform_kotak_login()
+                config = _kotak_config()
+            except Exception as exc:
+                return jsonify({"ok": False, "error": f"Kotak session auto-reconnect failed: {exc}"}), 401
+
         if not config["sessionReady"] or _KOTAK_CLIENT is None:
             return jsonify({"ok": False, "error": "Kotak Neo trading session is not connected"}), 401
         if not _market_open_now() and not _env_bool("OPTIONSDESK_ALLOW_AMO", False):
@@ -331,7 +443,18 @@ def register_optionsdesk_v195_routes(app):
             if product not in {"NRML", "MIS", "CNC", "MTF"}:
                 raise ValueError("Unsupported product type")
             exchange = str(body.get("exchangeSegment") or "nse_fo").lower()
-            trading_symbol = str(body.get("tradingSymbol") or "").strip()
+
+            # Direct trading symbol without prefix
+            trading_symbol = str(body.get("tradingSymbol") or "").replace("NSE:", "").replace("BSE:", "").strip()
+            underlying = str(body.get("underlying") or "").strip().upper()
+            expiry = _clean_expiry(body.get("expiry"))
+            option_type = str(body.get("optionType") or "").strip().upper()
+            strike = _as_float(body.get("strikePrice") or body.get("strike"))
+
+            # Fallback to fast algorithmic symbol if not provided
+            if not trading_symbol and underlying and expiry and strike and option_type:
+                trading_symbol = _construct_nse_symbol(underlying, expiry, strike, option_type)
+
             contract = None
             with _KOTAK_LOCK:
                 if not trading_symbol:
@@ -356,9 +479,50 @@ def register_optionsdesk_v195_routes(app):
             stat = str((response or {}).get("stat") or "").lower() if isinstance(response, dict) else ""
             if stat and stat not in {"ok", "success"}:
                 _RECENT_ORDER_IDS.pop(client_order_id, None)
-                return jsonify({"ok": False, "error": (response or {}).get("errMsg") or "Kotak Neo rejected the order", "data": response}), 400
+                err_msg = (response or {}).get("errMsg") or (response or {}).get("message") or "Kotak Neo rejected the order"
+                return jsonify({"ok": False, "error": str(err_msg), "data": response}), 400
             _DAILY_ORDER_COUNT["count"] += 1
-            return jsonify({"ok": True, "message": "Live order sent to Kotak Neo", "contract": contract, "data": response})
+            return jsonify({"ok": True, "message": "Live order sent to Kotak Neo", "tradingSymbol": trading_symbol, "data": response})
         except Exception as exc:
             _RECENT_ORDER_IDS.pop(client_order_id, None)
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.route("/api/kotakneo/positions", methods=["GET"])
+    @_require_mobile_auth
+    def kotakneo_positions():
+        global _KOTAK_CLIENT
+        config = _kotak_config()
+        if (not config["sessionReady"] or _KOTAK_CLIENT is None) and config["autoTotpConfigured"]:
+            try:
+                _perform_kotak_login()
+                config = _kotak_config()
+            except Exception as exc:
+                return jsonify({"ok": False, "error": f"Kotak session auto-reconnect failed: {exc}"}), 401
+        if not config["sessionReady"] or _KOTAK_CLIENT is None:
+            return jsonify({"ok": False, "error": "Kotak Neo trading session is not connected"}), 401
+        try:
+            with _KOTAK_LOCK:
+                resp = _KOTAK_CLIENT.positions()
+            return jsonify({"ok": True, "data": resp})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.route("/api/kotakneo/orders", methods=["GET"])
+    @_require_mobile_auth
+    def kotakneo_orders():
+        global _KOTAK_CLIENT
+        config = _kotak_config()
+        if (not config["sessionReady"] or _KOTAK_CLIENT is None) and config["autoTotpConfigured"]:
+            try:
+                _perform_kotak_login()
+                config = _kotak_config()
+            except Exception as exc:
+                return jsonify({"ok": False, "error": f"Kotak session auto-reconnect failed: {exc}"}), 401
+        if not config["sessionReady"] or _KOTAK_CLIENT is None:
+            return jsonify({"ok": False, "error": "Kotak Neo trading session is not connected"}), 401
+        try:
+            with _KOTAK_LOCK:
+                resp = _KOTAK_CLIENT.order_report()
+            return jsonify({"ok": True, "data": resp})
+        except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400

@@ -913,11 +913,10 @@ def clear_live_market_caches():
 INDEX_MAP = {
     "NIFTY": {
         "spot": "NSE:NIFTY50-INDEX",
-        "future": "NSE:NIFTY26AUGFUT",
+        "future": None,
         "label": "NIFTY 50",
         "option_symbols": [
             "NSE:NIFTY50-INDEX",
-            "NSE:NIFTY26AUGFUT",
             "NSE:NIFTY-INDEX",
             "NSE:NIFTY",
         ],
@@ -943,11 +942,10 @@ INDEX_MAP = {
     },
     "BANKNIFTY": {
         "spot": "NSE:NIFTYBANK-INDEX",
-        "future": "NSE:BANKNIFTY26AUGFUT",
+        "future": None,
         "label": "BANK NIFTY",
         "option_symbols": [
             "NSE:NIFTYBANK-INDEX",
-            "NSE:BANKNIFTY26AUGFUT",
             "NSE:BANKNIFTY-INDEX",
             "NSE:BANKNIFTY",
         ],
@@ -960,11 +958,10 @@ INDEX_MAP = {
     },
     "SENSEX": {
         "spot": "BSE:SENSEX-INDEX",
-        "future": "BSE:SENSEX26AUGFUT",
+        "future": None,
         "label": "SENSEX",
         "option_symbols": [
             "BSE:SENSEX-INDEX",
-            "BSE:SENSEX26AUGFUT",
             "BSE:SENSEX",
             "SENSEX",
         ],
@@ -1960,12 +1957,90 @@ def stream_symbol_for_index(symbol_key):
             return fyers_symbol
     return "NSE:NIFTY50-INDEX"
 
+_ACTIVE_FUTURE_CACHE = {}
+
+
+def _future_month(year, month, offset):
+    month0 = (month - 1) + int(offset)
+    return year + month0 // 12, month0 % 12 + 1
+
+
+def active_future_candidates(symbol_key):
+    key = normalize_symbol_key(symbol_key)
+    if key not in INDEX_MAP:
+        return []
+    root = {"NIFTY": "NIFTY", "BANKNIFTY": "BANKNIFTY", "SENSEX": "SENSEX"}.get(key)
+    exchange = "BSE" if key == "SENSEX" else "NSE"
+    if not root:
+        return []
+    now = ist_now()
+    out = []
+    for offset in (0, 1, 2):
+        year, month = _future_month(now.year, now.month, offset)
+        month_text = datetime(year, month, 1).strftime("%b").upper()
+        out.append(f"{exchange}:{root}{str(year)[-2:]}{month_text}FUT")
+    return unique_symbols(out)
+
+
+def resolve_active_future(symbol_key, force=False):
+    key = normalize_symbol_key(symbol_key)
+    cfg = INDEX_MAP.get(key)
+    if not cfg:
+        return {"verified": False, "symbol": None, "block": {}, "reason": "Unsupported index"}
+
+    now = time.time()
+    cached = _ACTIVE_FUTURE_CACHE.get(key) or {}
+    if not force and now - safe_float(cached.get("checkedAt"), 0) < 120:
+        return cached
+
+    selected = None
+    selected_block = {}
+    for candidate in active_future_candidates(key):
+        try:
+            block = get_quote_block(candidate) or {}
+            metrics = extract_quote_metrics(block)
+            ltp = safe_float(metrics.get("ltp"), None)
+            if ltp is None or ltp <= 0:
+                continue
+            tick_time = safe_int(pick_first(block, ["tt", "timestamp", "last_traded_time", "lastTradeTime"], None), None)
+            if tick_time is not None:
+                tick_seconds = tick_time / 1000.0 if tick_time > 100000000000 else float(tick_time)
+                if abs(now - tick_seconds) > 14 * 24 * 3600:
+                    continue
+            selected = candidate
+            selected_block = block
+            break
+        except Exception as e:
+            if DEBUG_LOGS:
+                print(f"future verify error {candidate}: {e}")
+
+    aliases = [x for x in (cfg.get("option_symbols") or []) if x and "FUT" not in str(x).upper()]
+    if selected:
+        cfg["future"] = selected
+        cfg["option_symbols"] = unique_symbols([cfg.get("spot"), selected] + aliases)
+        result = {
+            "verified": True,
+            "symbol": selected,
+            "block": selected_block,
+            "checkedAt": now,
+            "reason": "Live FYERS futures quote verified",
+        }
+    else:
+        cfg["future"] = None
+        cfg["option_symbols"] = unique_symbols([cfg.get("spot")] + aliases)
+        result = {
+            "verified": False,
+            "symbol": None,
+            "block": {},
+            "checkedAt": now,
+            "reason": "No current FYERS futures contract could be verified",
+        }
+    _ACTIVE_FUTURE_CACHE[key] = result
+    return result
+
+
 def stream_future_for_index(symbol_key):
-    symbol_key = normalize_symbol_key(symbol_key)
-    cfg = INDEX_MAP.get(symbol_key)
-    if cfg:
-        return cfg.get("future")
-    return None
+    return resolve_active_future(symbol_key).get("symbol")
 
 
 def is_streamable_index_key(symbol_key):
@@ -2053,13 +2128,15 @@ def on_fyers_ws_message(message):
             if symbol and is_meaningful_tick(tick):
                 try:
                     socketio.emit('tick', tick, room=symbol)
-                    if "CE" in symbol or "PE" in symbol:
-                        if "BANKNIFTY" in symbol: socketio.emit('tick', tick, room="BANKNIFTY")
-                        elif "FINNIFTY" in symbol: socketio.emit('tick', tick, room="FINNIFTY")
-                        elif "MIDCPNIFTY" in symbol: socketio.emit('tick', tick, room="MIDCPNIFTY")
-                        elif "NIFTY" in symbol: socketio.emit('tick', tick, room="NIFTY")
-                        elif "SENSEX" in symbol: socketio.emit('tick', tick, room="SENSEX")
-                        elif "BANKEX" in symbol: socketio.emit('tick', tick, room="BANKEX")
+                    # Generic index rooms receive only their spot-index stream. Derivative
+                    # CE/PE/futures ticks are never rebroadcast into NIFTY/BANKNIFTY/SENSEX.
+                    spot_room = {
+                        normalize_symbol_key(INDEX_MAP["NIFTY"]["spot"]): "NIFTY",
+                        normalize_symbol_key(INDEX_MAP["BANKNIFTY"]["spot"]): "BANKNIFTY",
+                        normalize_symbol_key(INDEX_MAP["SENSEX"]["spot"]): "SENSEX",
+                    }.get(normalize_symbol_key(symbol))
+                    if spot_room:
+                        socketio.emit('tick', tick, room=spot_room)
                 except Exception:
 
                     pass
@@ -2747,6 +2824,8 @@ def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12
             if resp and rows:
                 if first_candidate != "UNKNOWN":
                     _SUCCESSFUL_OC_SYMBOLS[first_candidate] = sym
+                if isinstance(resp, dict):
+                    resp["_clean_requestedExpiryTimestamp"] = str(expiry_timestamp or "").strip() or None
                 return resp
 
         except Exception as e:
@@ -2849,7 +2928,7 @@ def update_leg_values(row, side, source):
             row["pe_iv"] = iv
 
 
-def parse_option_chain(raw, spot_price):
+def _parse_normalized_option_chain(raw, spot_price):
     if not raw:
         return []
 
@@ -2992,6 +3071,221 @@ def parse_option_chain(raw, spot_price):
 
     return rows
     
+
+# =========================================================
+# STRICT OPTION CONTRACT NORMALIZATION
+# =========================================================
+# FYERS currently returns flat one-contract rows. We validate side, strike and
+# exact symbol first; only then do generic fields such as oi/oich/ltp become
+# eligible for that CE or PE leg. Opposite-side key fallback is never allowed.
+def _strict_pick(obj, keys, default=None):
+    if not isinstance(obj, dict):
+        return default
+    for key in keys:
+        if key in obj and obj.get(key) is not None:
+            return obj.get(key)
+    return default
+
+def _strict_expiry_meta(raw):
+    data = raw.get("data", raw) if isinstance(raw, dict) else {}
+    expiry_data = data.get("expiryData", []) if isinstance(data, dict) else []
+    requested = str((raw or {}).get("_strict_requestedExpiryTimestamp") or "").strip() if isinstance(raw, dict) else ""
+    expiries = []
+    selected = None
+    for item in expiry_data if isinstance(expiry_data, list) else []:
+        if not isinstance(item, dict):
+            continue
+        row = {
+            "date": str(item.get("date") or "").strip() or None,
+            "timestamp": str(item.get("expiry") or item.get("timestamp") or "").strip() or None,
+            "flag": str(item.get("expiry_flag") or item.get("flag") or "").strip() or None,
+        }
+        expiries.append(row)
+        if requested and row["timestamp"] == requested:
+            selected = row
+    if selected is None and expiries:
+        selected = expiries[0]
+    return {
+        "selectedExpiry": selected.get("date") if selected else None,
+        "selectedExpiryTimestamp": selected.get("timestamp") if selected else None,
+        "expiryFlag": selected.get("flag") if selected else None,
+        "expiries": expiries,
+    }
+
+def _strict_symbol_side(symbol):
+    text = str(symbol or "").strip().upper()
+    match = re.search(r"(CE|PE)$", text)
+    return match.group(1) if match else None
+
+def _strict_symbol_matches_strike(symbol, side, strike):
+    text = str(symbol or "").strip().upper()
+    if not text or _strict_symbol_side(text) != side:
+        return False
+    strike_num = safe_float(strike, None)
+    if strike_num is None or strike_num <= 0:
+        return False
+    if float(strike_num).is_integer():
+        strike_text = str(int(strike_num))
+        return text.endswith(f"{strike_text}{side}")
+    return True
+
+def _strict_explicit_flat_side(item):
+    if not isinstance(item, dict):
+        return None
+    explicit = str(
+        item.get("option_type")
+        or item.get("optionType")
+        or item.get("instrument_type")
+        or item.get("instrumentType")
+        or item.get("side")
+        or item.get("type")
+        or ""
+    ).strip().upper()
+    if explicit in {"CE", "CALL", "C"}:
+        explicit = "CE"
+    elif explicit in {"PE", "PUT", "P"}:
+        explicit = "PE"
+    else:
+        explicit = None
+
+    generic_symbol = _strict_pick(item, ["symbol", "fySymbol", "fyersSymbol", "ex_symbol"], None)
+    symbol_side = _strict_symbol_side(generic_symbol)
+
+    if explicit and symbol_side and explicit != symbol_side:
+        return None
+    return explicit or symbol_side
+
+def _strict_side_keys(side, kind):
+    prefix = "ce" if side == "CE" else "pe"
+    suffix = side
+    mapping = {
+        "symbol": [f"symbol_{suffix}", f"{prefix}_symbol", f"{suffix}_symbol"],
+        "token": [f"fyToken_{suffix}", f"{prefix}_token", f"token_{suffix}"],
+        "ltp": [f"ltp_{suffix}", f"{prefix}_ltp"],
+        "ch": [f"ch_{suffix}", f"{prefix}_ch", f"ltpch_{suffix}", f"{prefix}_ltpch"],
+        "bid": [f"bid_{suffix}", f"{prefix}_bid"],
+        "ask": [f"ask_{suffix}", f"{prefix}_ask"],
+        "oi": [f"oi_{suffix}", f"{prefix}_oi"],
+        "oich": [f"oich_{suffix}", f"{prefix}_oich"],
+        "prev_oi": [f"prev_oi_{suffix}", f"{prefix}_prev_oi", f"pdoi_{suffix}", f"{prefix}_pdoi"],
+        "volume": [f"volume_{suffix}", f"{prefix}_volume"],
+        "iv": [f"iv_{suffix}", f"{prefix}_iv"],
+    }
+    return mapping[kind]
+
+def _strict_build_leg(item, side, strike, nested=None):
+    scoped = nested if isinstance(nested, dict) and nested else None
+    flat_side = _strict_explicit_flat_side(item)
+
+    if scoped is not None:
+        symbol = _strict_pick(scoped, ["symbol", "fySymbol", "fyersSymbol", "ex_symbol"], None)
+        generic_allowed = True
+    else:
+        symbol = _strict_pick(item, _strict_side_keys(side, "symbol"), None)
+        if not symbol and flat_side == side:
+            symbol = _strict_pick(item, ["symbol", "fySymbol", "fyersSymbol", "ex_symbol"], None)
+        generic_allowed = flat_side == side
+
+    if not _strict_symbol_matches_strike(symbol, side, strike):
+        return None
+
+    def value(kind, generic_keys):
+        if scoped is not None:
+            return _strict_pick(scoped, generic_keys, None)
+        specific = _strict_pick(item, _strict_side_keys(side, kind), None)
+        if specific is not None:
+            return specific
+        if generic_allowed:
+            return _strict_pick(item, generic_keys, None)
+        return None
+
+    return {
+        "strike_price": strike,
+        "option_type": side,
+        "symbol": symbol,
+        "fyToken": value("token", ["fyToken", "token", "instrument_token"]),
+        "ltp": value("ltp", ["ltp", "lastPrice", "lp", "price"]),
+        "ch": value("ch", ["ch", "change", "netChange", "price_change", "chng", "ltpch"]),
+        "bid": value("bid", ["bid", "bidPrice", "bestBid", "buyPrice"]),
+        "ask": value("ask", ["ask", "askPrice", "bestAsk", "sellPrice", "offer"]),
+        "oi": value("oi", ["oi", "openInterest", "open_interest"]),
+        "oich": value("oich", ["oich", "chngInOI", "changeinOpenInterest", "oiChange", "oi_change"]),
+        "prev_oi": value("prev_oi", ["prev_oi", "prevOi", "previousOi", "pdoi"]),
+        "volume": value("volume", ["volume", "vol", "tradedVolume", "volume_traded"]),
+        "iv": value("iv", ["iv", "impliedVolatility", "implied_volatility", "IV"]),
+    }
+
+def _strict_safe_option_rows(raw):
+    data = raw.get("data", raw) if isinstance(raw, dict) else raw
+    rows_src = _extract_option_rows_from_data(data)
+    safe_rows = []
+
+    for item in rows_src:
+        if not isinstance(item, dict):
+            continue
+        strike = safe_float(
+            _strict_pick(item, ["strike", "strike_price", "strikePrice", "sp", "strikePriceValue"], None),
+            None,
+        )
+        ce_obj = item.get("CE") or item.get("ce") or {}
+        pe_obj = item.get("PE") or item.get("pe") or {}
+        if strike is None:
+            scoped = ce_obj if ce_obj else pe_obj
+            strike = safe_float(_strict_pick(scoped, ["strike", "strike_price", "strikePrice", "sp"], None), None)
+        if strike is None or strike <= 0:
+            continue
+
+        sides = set()
+        if isinstance(ce_obj, dict) and ce_obj:
+            sides.add("CE")
+        if isinstance(pe_obj, dict) and pe_obj:
+            sides.add("PE")
+        if any(key in item for key in ["symbol_CE", "ce_symbol", "oi_CE", "ce_oi", "oich_CE", "ce_oich"]):
+            sides.add("CE")
+        if any(key in item for key in ["symbol_PE", "pe_symbol", "oi_PE", "pe_oi", "oich_PE", "pe_oich"]):
+            sides.add("PE")
+        flat_side = _strict_explicit_flat_side(item)
+        if flat_side:
+            sides.add(flat_side)
+
+        for side in ("CE", "PE"):
+            if side not in sides:
+                continue
+            nested = ce_obj if side == "CE" else pe_obj
+            leg = _strict_build_leg(item, side, strike, nested=nested)
+            if leg is not None:
+                safe_rows.append(leg)
+
+    return safe_rows
+
+
+def parse_option_chain(raw, spot_price):
+    if not raw:
+        return []
+    safe_rows = _strict_safe_option_rows(raw)
+    if not safe_rows:
+        return []
+    parsed = _parse_normalized_option_chain({"data": {"optionsChain": safe_rows}}, spot_price)
+    meta = _strict_expiry_meta(raw)
+    for row in parsed:
+        row["expiry"] = meta.get("selectedExpiry")
+        row["expiry_timestamp"] = meta.get("selectedExpiryTimestamp")
+        strike = safe_float(row.get("strike"), None)
+        if strike is None:
+            continue
+        for leg in safe_rows:
+            if safe_float(leg.get("strike_price"), None) != strike:
+                continue
+            if leg.get("option_type") == "CE":
+                prev = safe_int(leg.get("prev_oi"), None)
+                if prev is not None:
+                    row["ce_prev_oi"] = prev
+            elif leg.get("option_type") == "PE":
+                prev = safe_int(leg.get("prev_oi"), None)
+                if prev is not None:
+                    row["pe_prev_oi"] = prev
+    return parsed
+
 def fetch_fii_dii_data(cache_ttl=900):
     cached = get_cached("fii_dii", ttl=cache_ttl)
     if cached is not None:
@@ -3755,35 +4049,44 @@ def get_option_chain_rows_for_index(symbol_key, spot_price, cache_ttl=8, strikec
     set_cached("option_chain", result, key=cache_key)
     return result
 
-def normalize_future_against_spot(spot, future, max_abs_basis_pct=0.75):
+def normalize_future_against_spot(spot, future, max_abs_basis_pct=0.75, source_symbol=None, verified=False, verification_reason=None):
+    future = dict(future or {})
     spot_ltp = safe_float((spot or {}).get("ltp"), None)
-    future_ltp = safe_float((future or {}).get("ltp"), None)
+    future_ltp = safe_float(future.get("ltp"), None)
+
+    future["sourceSymbol"] = source_symbol
+    future["verified"] = bool(verified and source_symbol and future_ltp is not None and future_ltp > 0)
+    future["unavailable"] = not future["verified"]
+    future["verificationReason"] = verification_reason or ("Live FYERS futures quote verified" if future["verified"] else "Verified futures unavailable")
+
+    if not future["verified"]:
+        for key in ["ltp", "change", "change_pct", "high", "low", "open", "prev_close", "volume", "vwap"]:
+            future[key] = None
+        future["basis"] = None
+        future["basis_pct"] = None
+        return future
 
     if spot_ltp is None or spot_ltp <= 0:
-        return future or {}
+        future["basis"] = None
+        future["basis_pct"] = None
+        return future
 
-    if future_ltp is None:
-        return future or {}
+    basis = future_ltp - spot_ltp
+    basis_pct = (basis / spot_ltp) * 100.0
+    if abs(basis_pct) > max_abs_basis_pct:
+        # Never substitute spot for an invalid/stale futures quote. Mark it unavailable.
+        future["verified"] = False
+        future["unavailable"] = True
+        future["verificationReason"] = f"Futures basis {basis_pct:.2f}% failed validation"
+        for key in ["ltp", "change", "change_pct", "high", "low", "open", "prev_close", "volume", "vwap"]:
+            future[key] = None
+        future["basis"] = None
+        future["basis_pct"] = None
+        return future
 
-    basis_pct = ((future_ltp - spot_ltp) / spot_ltp) * 100.0
-    if abs(basis_pct) <= max_abs_basis_pct:
-        return future or {}
-
-    # Fyers can keep returning expired futures symbols. For index dashboard cards,
-    # prefer spot-equivalent futures over displaying a large stale basis.
-    return {
-        **(future or {}),
-        "ltp": spot.get("ltp"),
-        "change": spot.get("change"),
-        "change_pct": spot.get("change_pct"),
-        "high": spot.get("high"),
-        "low": spot.get("low"),
-        "open": spot.get("open"),
-        "prev_close": spot.get("prev_close"),
-        "volume": spot.get("volume"),
-        "vwap": spot.get("vwap"),
-        "stale_quote_replaced": True,
-    }
+    future["basis"] = round2(basis)
+    future["basis_pct"] = round2(basis_pct)
+    return future
 
 
 def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date=None, expiry_catalog=None):
@@ -3793,13 +4096,15 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
         return cached
 
     cfg = INDEX_MAP[symbol_key]
-    
-    symbols_to_stream = [sym for sym in [cfg.get("spot"), cfg.get("future"), VIX_SYMBOL] if sym]
+    future_meta = resolve_active_future(symbol_key)
+    future_symbol = future_meta.get("symbol")
+
+    symbols_to_stream = [sym for sym in [cfg.get("spot"), future_symbol, VIX_SYMBOL] if sym]
     ensure_fyers_ws_stream(symbols_to_stream)
 
     q_map = get_quotes_map(symbols_to_stream)
     spot_raw = q_map.get(cfg["spot"]) or q_map.get(normalize_symbol_key(cfg["spot"])) or {}
-    future_raw = q_map.get(cfg["future"]) or q_map.get(normalize_symbol_key(cfg["future"])) or {}
+    future_raw = (q_map.get(future_symbol) or q_map.get(normalize_symbol_key(future_symbol)) or future_meta.get("block") or {}) if future_symbol else {}
     vix_raw = q_map.get(VIX_SYMBOL) or q_map.get(normalize_symbol_key(VIX_SYMBOL)) or {}
 
     if DEBUG_LOGS:
@@ -3811,33 +4116,20 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
     future = extract_quote_metrics(future_raw)
     vix = extract_quote_metrics(vix_raw)
 
-    if safe_float(future.get("ltp"), None) is None and safe_float(spot.get("ltp"), None) is not None:
-        future = {
-            **future,
-            "ltp": spot["ltp"],
-            "change": spot["change"],
-            "change_pct": spot["change_pct"],
-            "high": spot["high"],
-            "low": spot["low"],
-            "open": spot["open"],
-            "prev_close": spot["prev_close"],
-            "volume": spot["volume"],
-            "vwap": spot["vwap"],
-        }
-
-    future = normalize_future_against_spot(spot, future)
+    future = normalize_future_against_spot(
+        spot,
+        future,
+        source_symbol=future_symbol,
+        verified=bool(future_meta.get("verified")),
+        verification_reason=future_meta.get("reason"),
+    )
 
     spot_ltp = safe_float(spot.get("ltp"), None)
     future_ltp = safe_float(future.get("ltp"), None)
 
-    future_basis = round2(future_ltp - spot_ltp) if future_ltp is not None and spot_ltp is not None else None
-    future_basis_pct = round2((future_basis / spot_ltp) * 100) if future_basis is not None and spot_ltp not in (None, 0) else None
-
-    future["basis"] = future_basis
-    future["basis_pct"] = future_basis_pct
-
     spot["vwap"] = round2(clean_vwap_for_price(spot.get("vwap"), spot_ltp))
-    future["vwap"] = round2(clean_vwap_for_price(future.get("vwap"), future_ltp or spot_ltp))
+    if future_ltp is not None:
+        future["vwap"] = round2(clean_vwap_for_price(future.get("vwap"), future_ltp))
     history_snapshot = get_intraday_history_snapshot(symbol_key, spot_ltp or future_ltp)
     history_open = safe_float(history_snapshot.get("todayOpen"), None)
     if spot.get("open") in (None, 0) and history_open not in (None, 0):
@@ -3847,13 +4139,10 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
     if spot.get("vwap") is None and history_vwap is not None:
         spot["vwap"] = round2(history_vwap)
         spot["vwap_source"] = "history_5m"
-    if future.get("vwap") is None and history_vwap is not None:
-        future["vwap"] = round2(history_vwap)
-        future["vwap_source"] = "history_5m"
 
     previous_day_levels_raw = get_previous_day_levels(
         cfg["spot"],
-        fallback_symbol=cfg["future"],
+        fallback_symbol=future_symbol,
         cache_key=f"prev_day_detail:{symbol_key}"
     ) or {}
 
@@ -3921,20 +4210,8 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
                 "ltp": implied_spot,
                 "source": "option_chain_implied",
             }
-            if safe_float(future.get("ltp"), None) is None:
-                future = {
-                    **future,
-                    "ltp": implied_spot,
-                    "basis": 0,
-                    "basis_pct": 0,
-                    "source": "option_chain_implied",
-                }
             spot_ltp = implied_spot
             future_ltp = safe_float(future.get("ltp"), None)
-            future_basis = round2(future_ltp - spot_ltp) if future_ltp is not None and spot_ltp is not None else None
-            future_basis_pct = round2((future_basis / spot_ltp) * 100) if future_basis is not None and spot_ltp not in (None, 0) else None
-            future["basis"] = future_basis
-            future["basis_pct"] = future_basis_pct
             if prev_close_for_change not in (None, 0):
                 spot["prev_close"] = round2(prev_close_for_change)
                 spot["change"] = round2(spot_ltp - prev_close_for_change)
@@ -7000,7 +7277,8 @@ def build_home_index_quote_card(symbol_key):
     spot_ltp = safe_float(spot.get("ltp"), None)
     future_ltp = safe_float(future.get("ltp"), None)
     spot["vwap"] = round2(clean_vwap_for_price(spot.get("vwap"), spot_ltp))
-    future["vwap"] = round2(clean_vwap_for_price(future.get("vwap"), future_ltp or spot_ltp))
+    if future_ltp is not None:
+        future["vwap"] = round2(clean_vwap_for_price(future.get("vwap"), future_ltp))
     history_vwap = get_intraday_history_vwap(symbol_key, spot_ltp or future_ltp)
     if spot.get("vwap") is None and history_vwap is not None:
         spot["vwap"] = round2(history_vwap)
@@ -7207,10 +7485,13 @@ def build_fast_home_index_quote_card(symbol_key, market_strip=None, previous_car
 
 
 def current_index_future_quotes():
-    symbols = [INDEX_MAP[item]["future"] for item in ["NIFTY", "BANKNIFTY", "SENSEX"] if INDEX_MAP.get(item, {}).get("future")]
     quotes = {}
-    for symbol in symbols:
-        block = get_cached_quote_block(symbol) or get_stale_quote_block(symbol)
+    for item in ["NIFTY", "BANKNIFTY", "SENSEX"]:
+        meta = resolve_active_future(item)
+        symbol = meta.get("symbol")
+        if not symbol or not meta.get("verified"):
+            continue
+        block = get_cached_quote_block(symbol) or meta.get("block") or get_stale_quote_block(symbol)
         if block:
             quotes[symbol] = block
             quotes[normalize_symbol_key(symbol)] = block
@@ -7310,28 +7591,17 @@ def build_home_index_analytics_card(symbol_key):
 
 def build_home_index_card(symbol_key):
     cfg = INDEX_MAP[symbol_key]
+    future_meta = resolve_active_future(symbol_key)
+    future_symbol = future_meta.get("symbol")
 
     spot_raw = get_quote_block(cfg["spot"])
-    future_raw = get_quote_block(cfg["future"])
+    future_raw = (get_quote_block(future_symbol) or future_meta.get("block") or {}) if future_symbol else {}
 
     spot = extract_quote_metrics(spot_raw)
     future = extract_quote_metrics(future_raw)
-
-    if safe_float(future.get("ltp"), None) is None and safe_float(spot.get("ltp"), None) is not None:
-        future = {
-            **future,
-            "ltp": spot.get("ltp"),
-            "change": spot.get("change"),
-            "change_pct": spot.get("change_pct"),
-            "high": spot.get("high"),
-            "low": spot.get("low"),
-            "open": spot.get("open"),
-            "prev_close": spot.get("prev_close"),
-            "volume": spot.get("volume"),
-            "vwap": spot.get("vwap"),
-        }
-
-    future = normalize_future_against_spot(spot, future)
+    future = normalize_future_against_spot(
+        spot, future, source_symbol=future_symbol, verified=bool(future_meta.get("verified")), verification_reason=future_meta.get("reason")
+    )
 
     spot_ltp = safe_float(spot.get("ltp"), None)
     future_ltp = safe_float(future.get("ltp"), None)
@@ -7341,9 +7611,6 @@ def build_home_index_card(symbol_key):
     if spot.get("vwap") is None and history_vwap is not None:
         spot["vwap"] = round2(history_vwap)
         spot["vwap_source"] = "history_5m"
-    if future.get("vwap") is None and history_vwap is not None:
-        future["vwap"] = round2(history_vwap)
-        future["vwap_source"] = "history_5m"
 
     basis = round2(future_ltp - spot_ltp) if future_ltp is not None and spot_ltp is not None else None
     basis_pct = round2((basis / spot_ltp) * 100) if basis is not None and spot_ltp not in (None, 0) else None
@@ -8533,37 +8800,129 @@ def option_chain():
             "timestamp": ist_now().strftime("%d-%m-%Y %H:%M:%S")
         }), 500
 
+@app.route("/api/debug/oi-verify")
+def debug_oi_verify():
+    symbol_key = (request.args.get("symbol") or "NIFTY").strip().upper()
+    if symbol_key not in INDEX_MAP:
+        symbol_key = "NIFTY"
+    expiry_ts = str(request.args.get("expiryTimestamp") or request.args.get("timestamp") or "").strip() or None
+    try:
+        radius = max(50.0, min(1000.0, float(request.args.get("radius") or 250)))
+    except Exception:
+        radius = 250.0
+
+    cfg = INDEX_MAP[symbol_key]
+    future_meta = resolve_active_future(symbol_key)
+    future_symbol = future_meta.get("symbol")
+    spot_raw = get_quote_block(cfg["spot"])
+    spot = extract_quote_metrics(spot_raw).get("ltp")
+    raw = get_option_chain_raw(
+        cfg.get("option_symbols") or [cfg.get("spot")],
+        future_symbol,
+        strikecount=50,
+        expiry_timestamp=expiry_ts,
+    )
+    strict_raw_rows = _strict_safe_option_rows(raw)
+    parsed = parse_option_chain(raw, spot)
+    parsed_by_strike = {safe_float(r.get("strike"), None): r for r in parsed}
+    comparisons = []
+
+    for leg in strict_raw_rows:
+        strike = safe_float(leg.get("strike_price"), None)
+        if strike is None or (spot is not None and abs(strike - spot) > radius):
+            continue
+        side = leg.get("option_type")
+        row = parsed_by_strike.get(strike) or {}
+        prefix = "ce" if side == "CE" else "pe"
+        raw_oi = safe_int(leg.get("oi"), None)
+        raw_oich = safe_int(leg.get("oich"), None)
+        parsed_oi = safe_int(row.get(f"{prefix}_oi"), None)
+        parsed_oich = safe_int(row.get(f"{prefix}_oich"), None)
+        raw_symbol = str(leg.get("symbol") or "").strip()
+        parsed_symbol = str(row.get(f"{prefix}_symbol") or "").strip()
+        comparisons.append({
+            "strike": strike,
+            "side": side,
+            "rawSymbol": raw_symbol,
+            "parsedSymbol": parsed_symbol,
+            "symbolMatch": bool(raw_symbol and raw_symbol == parsed_symbol),
+            "rawOi": raw_oi,
+            "parsedOi": parsed_oi,
+            "oiMatch": raw_oi == parsed_oi,
+            "rawOiChange": raw_oich,
+            "parsedOiChange": parsed_oich,
+            "oiChangeMatch": raw_oich == parsed_oich,
+        })
+
+    verification = bool(comparisons) and all(x["symbolMatch"] and x["oiMatch"] and x["oiChangeMatch"] for x in comparisons)
+    meta = _strict_expiry_meta(raw)
+    return jsonify({
+        "ok": True,
+        "symbol": symbol_key,
+        "spot": spot,
+        **meta,
+        "verification": verification,
+        "futureVerified": bool(future_meta.get("verified")),
+        "futureSymbol": future_symbol,
+        "comparisons": sorted(comparisons, key=lambda x: (x["strike"], x["side"])),
+    })
+
+
+@app.route("/api/debug/clean-v2")
+def debug_clean_v2():
+    symbol_key = (request.args.get("symbol") or "NIFTY").strip().upper()
+    if symbol_key not in INDEX_MAP:
+        symbol_key = "NIFTY"
+    future_meta = resolve_active_future(symbol_key, force=True)
+    data = build_dashboard(symbol_key, cache_ttl=0)
+    future = data.get("future") or {}
+    return jsonify({
+        "ok": True,
+        "symbol": symbol_key,
+        "parserMode": "STRICT_EXACT_SIDE_SYMBOL_STRIKE",
+        "selectedExpiry": data.get("selectedExpiry"),
+        "selectedExpiryTimestamp": data.get("selectedExpiryTimestamp"),
+        "optionRows": len(data.get("optionChain") or []),
+        "future": {
+            "verified": bool(future.get("verified")),
+            "unavailable": bool(future.get("unavailable")),
+            "sourceSymbol": future.get("sourceSymbol"),
+            "reason": future.get("verificationReason") or future_meta.get("reason"),
+            "basisPct": future.get("basis_pct"),
+        },
+        "socketMode": "EXACT_DERIVATIVE_ROOMS",
+        "spotRoomAliasesOnly": True,
+    })
+
+
 @app.route("/api/debug/index")
 def debug_index():
     symbol = request.args.get("symbol", "NIFTY").strip().upper()
     if symbol not in INDEX_MAP:
         symbol = "NIFTY"
-
     cfg = INDEX_MAP[symbol]
-
+    future_meta = resolve_active_future(symbol)
+    future_symbol = future_meta.get("symbol")
     spot_raw = get_quote_block(cfg["spot"])
-    future_raw = get_quote_block(cfg["future"])
-    option_symbols = cfg.get("option_symbols") or [cfg["spot"], cfg["future"]]
-    oc_raw = get_option_chain_raw(option_symbols, cfg["future"], strikecount=60)
+    future_raw = (get_quote_block(future_symbol) or future_meta.get("block") or {}) if future_symbol else {}
+    option_symbols = cfg.get("option_symbols") or [cfg["spot"]]
+    oc_raw = get_option_chain_raw(option_symbols, future_symbol, strikecount=50)
     parsed_chain = parse_option_chain(oc_raw, extract_quote_metrics(spot_raw).get("ltp"))
-
     return jsonify({
-    "symbol": symbol,
-    "spotSymbol": cfg["spot"],
-    "futureSymbol": cfg["future"],
-    "optionSymbolsTried": option_symbols,
-    "spotRaw": spot_raw,
-    "futureRaw": future_raw,
-    "optionChainKeys": list((oc_raw or {}).keys()) if isinstance(oc_raw, dict) else [],
-    "optionChainDataType": str(type((oc_raw or {}).get("data"))) if isinstance(oc_raw, dict) else str(type(oc_raw)),
-    "optionChainHasData": bool((oc_raw or {}).get("data")) if isinstance(oc_raw, dict) else bool(oc_raw),
-
-    "parsedChainRows": len(parsed_chain),
-    "parsedChainSample": parsed_chain[:5],
-    "rawOptionChainSample": _extract_option_rows_from_data(
-        (oc_raw or {}).get("data", oc_raw) if isinstance(oc_raw, dict) else oc_raw
-    )[:3],
-})
+        "symbol": symbol,
+        "spotSymbol": cfg["spot"],
+        "futureSymbol": future_symbol,
+        "futureVerified": bool(future_meta.get("verified")),
+        "futureReason": future_meta.get("reason"),
+        "optionSymbolsTried": option_symbols,
+        "spotRaw": spot_raw,
+        "futureRaw": future_raw,
+        "optionChainKeys": list((oc_raw or {}).keys()) if isinstance(oc_raw, dict) else [],
+        "optionChainHasData": bool((oc_raw or {}).get("data")) if isinstance(oc_raw, dict) else bool(oc_raw),
+        "parsedChainRows": len(parsed_chain),
+        "parsedChainSample": parsed_chain[:5],
+        "rawOptionChainSample": _extract_option_rows_from_data((oc_raw or {}).get("data", oc_raw) if isinstance(oc_raw, dict) else oc_raw)[:3],
+    })
 
 
 @socketio.on('connect')
@@ -8577,80 +8936,38 @@ def handle_subscribe(data):
     symbols = data.get('symbols', [])
     if not isinstance(symbols, list):
         symbols = [symbols]
-    
+
     valid_symbols = []
-    
-    # Base symbols like NIFTY need to be expanded into Spot, Future, and Option Chain symbols
-    for base_sym in symbols:
-        if not base_sym or not isinstance(base_sym, str): continue
-        base_sym = base_sym.strip().upper()
-        
-        # Always join the base room so frontend gets updates easily
-        join_room(base_sym)
-        
-        if is_streamable_index_key(base_sym):
-            spot = stream_symbol_for_index(base_sym)
-            future = stream_future_for_index(base_sym)
+    for requested in symbols:
+        if not requested or not isinstance(requested, str):
+            continue
+        requested = requested.strip().upper()
+        if not requested:
+            continue
+        join_room(requested)
+
+        if is_streamable_index_key(requested):
+            # A generic index subscription owns only spot + the currently verified future.
+            # Option Chain screens subscribe exact CE/PE symbols separately.
+            spot = stream_symbol_for_index(requested)
+            future = stream_future_for_index(requested)
             if spot:
                 valid_symbols.append(spot)
                 join_room(spot)
             if future:
                 valid_symbols.append(future)
                 join_room(future)
-                
-            # Grab the option chain symbols if available in the cache
-            chain_syms = _FYERS_WS_OPTION_SYMBOLS.get(base_sym, [])
-            if not chain_syms:
-                # If we don't have them cached, try to fetch the chain quickly
-                try:
-                    cfg = INDEX_MAP.get(base_sym, {})
-                    option_symbols = cfg.get("option_symbols", [base_sym])
-                    
-                    global _FYERS_WS_OPTION_LOCKS
-                    if '_FYERS_WS_OPTION_LOCKS' not in globals():
-                        _FYERS_WS_OPTION_LOCKS = {}
-                        
-                    if not _FYERS_WS_OPTION_LOCKS.get(base_sym):
-                        _FYERS_WS_OPTION_LOCKS[base_sym] = True
-                        def fetch_bg(syms, fut_sym, b_sym):
-                            try:
-                                oc_raw = get_option_chain_raw(syms, fut_sym, strikecount=30)
-                                if isinstance(oc_raw, dict) and "data" in oc_raw:
-                                    data_block = oc_raw["data"]
-                                    c_syms = []
-                                    if isinstance(data_block, dict):
-                                        opts = data_block.get("optionsChain", [])
-                                        for row in opts:
-                                            if "symbol_CE" in row: c_syms.append(row["symbol_CE"])
-                                            if "symbol_PE" in row: c_syms.append(row["symbol_PE"])
-                                    _FYERS_WS_OPTION_SYMBOLS[b_sym] = list(set(c_syms))
-                                    if _FYERS_WS_OPTION_SYMBOLS[b_sym]:
-                                        ensure_fyers_ws_stream(_FYERS_WS_OPTION_SYMBOLS[b_sym])
-                            except Exception as e:
-                                print(f"bg fetch error for {b_sym}: {e}")
-                            finally:
-                                _FYERS_WS_OPTION_LOCKS[b_sym] = False
-                        
-                        threading.Thread(target=fetch_bg, args=(option_symbols, cfg.get("future"), base_sym), daemon=True).start()
-                except Exception as e:
-                    print("handle_subscribe background fetch spawn error:", e)
-            
-            for cs in chain_syms:
-                if cs:
-                    valid_symbols.append(cs)
-                    join_room(cs) # Also join the individual symbol room
-                    
         else:
-            # Handle direct Fyers symbols or stocks
-            stream_sym = sanitize_fyers_history_symbol(base_sym) or normalize_stock_option_symbol(base_sym)
-            if stream_sym:
-                valid_symbols.append(stream_sym)
-                join_room(stream_sym)
+            exact = sanitize_fyers_history_symbol(requested) or normalize_stock_option_symbol(requested)
+            if exact:
+                valid_symbols.append(exact)
+                join_room(exact)
 
     valid_symbols = unique_symbols(valid_symbols)
     if valid_symbols:
-        # Subscribe via Fyers data websocket
         ensure_fyers_ws_stream(valid_symbols)
+    emit('subscribed', {'symbols': valid_symbols})
+
 
 @socketio.on('subscribe_strip')
 def handle_subscribe_strip(data):
@@ -9417,86 +9734,8 @@ ensure_background_attention_monitor_started()
 # --- V2.0.20K BACKGROUND ATTENTION MONITOR END ---
 
 
+
+
+
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", debug=False, port=5000, use_reloader=False, allow_unsafe_werkzeug=True)
-
-
-# --- OPTION BUYER HUB GREEKS THREAD ---
-def greeks_updater_thread():
-    while True:
-        try:
-            time.sleep(2.0)
-            if not is_market_open():
-                time.sleep(10.0) # sleep longer if market is closed
-                continue
-                
-            if not _FYERS_WS_STATUS.get("connected"):
-                continue
-                
-            with _FYERS_WS_LOCK:
-                # We need to find the spot price. 
-                # Just find the first NIFTY50-INDEX or BANKNIFTY-INDEX in ticks.
-                spot_price = None
-                spot_symbol = "NSE:NIFTY50-INDEX"
-                if "NSE:NIFTY50-INDEX" in _FYERS_WS_TICKS:
-                    spot_price = safe_float(_FYERS_WS_TICKS["NSE:NIFTY50-INDEX"].get("ltp"))
-                elif "NSE:NIFTY BANK-INDEX" in _FYERS_WS_TICKS:
-                    spot_symbol = "NSE:NIFTY BANK-INDEX"
-                    spot_price = safe_float(_FYERS_WS_TICKS["NSE:NIFTY BANK-INDEX"].get("ltp"))
-                    
-                if not spot_price:
-                    continue
-                    
-                greeks_data = {}
-                # Calculate greeks for all CE/PE in ticks
-                for sym, tick in _FYERS_WS_TICKS.items():
-                    if not isinstance(tick, dict):
-                        continue
-                    if "CE" not in sym and "PE" not in sym:
-                        continue
-                        
-                    # Extract strike
-                    match = re.search(r'(\d{4,5})(CE|PE)', sym)
-                    if not match:
-                        continue
-                        
-                    strike = safe_float(match.group(1))
-                    opt_type = match.group(2)
-                    ltp = safe_float(tick.get("ltp"))
-                    
-                    if not strike or not ltp:
-                        continue
-                        
-                    # Filter out far OTM to save CPU
-                    if abs(strike - spot_price) > 1000:
-                        continue
-                        
-                    # Rough 3 days to expiry
-                    T = 3.0 / 365.0
-                    r = 0.07
-                    
-                    iv = implied_volatility(ltp, spot_price, strike, T, r, opt_type)
-                    greeks = calculate_greeks(spot_price, strike, T, r, iv, opt_type)
-                    
-                    greeks_data[sym] = {
-                        "iv": round(iv * 100, 2),
-                        "delta": greeks["delta"],
-                        "theta": greeks["theta"],
-                        "gamma": greeks["gamma"]
-                    }
-                    
-            if greeks_data:
-                socketio.emit('greeks_update', greeks_data)
-                
-        except Exception as e:
-            print("Greeks thread error:", e)
-
-# Start thread
-threading.Thread(target=greeks_updater_thread, daemon=True).start()
-# ----------------------------------------
-
-
-# --- V2.0.20M1 GAP VISIBILITY SAFETY START ---
-
-
-# v2.0.20n2-fyers-health-20260903
