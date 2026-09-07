@@ -479,7 +479,6 @@ def register_optionsdesk_v195_routes(app):
                     amo="NO",
                     disclosed_quantity="0",
                     trigger_price=str(body.get("triggerPrice") or "0"),
-                    tag=client_order_id[:20],
                 )
             stat = str((response or {}).get("stat") or "").lower() if isinstance(response, dict) else ""
             if stat and stat not in {"ok", "success"}:
