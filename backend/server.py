@@ -4055,6 +4055,7 @@ def normalize_future_against_spot(spot, future, max_abs_basis_pct=0.75, source_s
     future_ltp = safe_float(future.get("ltp"), None)
 
     future["sourceSymbol"] = source_symbol
+    future["symbol"] = source_symbol
     future["verified"] = bool(verified and source_symbol and future_ltp is not None and future_ltp > 0)
     future["unavailable"] = not future["verified"]
     future["verificationReason"] = verification_reason or ("Live FYERS futures quote verified" if future["verified"] else "Verified futures unavailable")
