@@ -120,6 +120,37 @@ def _get_totp_secret() -> str:
     return ""
 
 
+def _format_kotak_response_error(resp) -> str:
+    if not isinstance(resp, dict):
+        return str(resp or "")
+    err_field = resp.get("error")
+    reasons = []
+    if isinstance(err_field, list):
+        for item in err_field:
+            if isinstance(item, dict):
+                m = item.get("message") or item.get("error") or str(item)
+                if m:
+                    reasons.append(str(m))
+            elif isinstance(item, str) and item:
+                reasons.append(item)
+    elif isinstance(err_field, dict):
+        m = err_field.get("message") or err_field.get("error")
+        if m:
+            reasons.append(str(m))
+    elif isinstance(err_field, str) and err_field:
+        reasons.append(err_field)
+
+    top_msg = str(resp.get("message") or "").strip()
+    if reasons:
+        detail = "; ".join(reasons)
+        if top_msg and top_msg != "Validation Errors" and top_msg not in detail:
+            return f"{top_msg}: {detail}"
+        return detail
+    if top_msg:
+        return top_msg
+    return str(resp)
+
+
 def _get_mpin_from_env() -> str:
     for var in [
         "KOTAK_NEO_MPIN",
@@ -129,7 +160,7 @@ def _get_mpin_from_env() -> str:
         "KOTAK_NEO_PIN",
     ]:
         val = os.getenv(var, "").strip()
-        if val:
+        if len(val) == 6 and val.isdigit():
             return val
     for k, v in os.environ.items():
         k_upper = k.upper()
@@ -137,7 +168,7 @@ def _get_mpin_from_env() -> str:
             continue
         if ("KOTAK" in k_upper or "NEO" in k_upper) and ("MPIN" in k_upper or "PIN" in k_upper):
             cleaned = v.strip()
-            if len(cleaned) in {4, 6} and cleaned.isdigit():
+            if len(cleaned) == 6 and cleaned.isdigit():
                 return cleaned
     return ""
 
@@ -213,8 +244,8 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
 
     if len(totp_val) < 6:
         raise ValueError("TOTP is missing or invalid. Provide a 6-digit TOTP code or configure KOTAK_NEO_TOTP_KEY on the backend.")
-    if len(mpin_val) < 4:
-        raise ValueError("MPIN is missing. Provide your 6-digit Kotak Neo MPIN or configure KOTAK_NEO_MPIN on the backend.")
+    if len(mpin_val) != 6 or not mpin_val.isdigit():
+        raise ValueError(f"Kotak Neo MPIN must be exactly 6 digits (received {len(mpin_val)} digits). Kotak Neo uses a 6-digit MPIN (the PIN used to open the Kotak Neo app), not a 4-digit ATM/banking PIN.")
 
     with _KOTAK_LOCK:
         client = _new_kotak_client()
@@ -238,10 +269,8 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
         if not view_token or not isinstance(login_resp, dict) or not login_resp.get("data"):
             _KOTAK_SESSION_READY = False
             _KOTAK_CLIENT = None
-            err_msg = ""
-            if isinstance(login_resp, dict):
-                err_msg = login_resp.get("message") or (login_resp.get("error", [{}])[0].get("message") if isinstance(login_resp.get("error"), list) and login_resp.get("error") else str(login_resp))
-            raise ValueError(f"Kotak Neo Step 1 (TOTP) failed: {err_msg or 'Invalid TOTP code or mobile/UCC. Please check your authenticator code.'}")
+            err_msg = _format_kotak_response_error(login_resp)
+            raise ValueError(f"Kotak Neo Step 1 (TOTP) failed: {err_msg or 'Invalid TOTP code or credentials. Please check your authenticator app.'}")
 
         # Step 2: Validate MPIN (Kotak Neo uses a 6-digit MPIN)
         validate_resp = client.totp_validate(mpin=mpin_val)
@@ -252,9 +281,7 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
         if not edit_token or not edit_sid:
             _KOTAK_SESSION_READY = False
             _KOTAK_CLIENT = None
-            err_msg = ""
-            if isinstance(validate_resp, dict):
-                err_msg = validate_resp.get("message") or (validate_resp.get("error", [{}])[0].get("message") if isinstance(validate_resp.get("error"), list) and validate_resp.get("error") else str(validate_resp))
+            err_msg = _format_kotak_response_error(validate_resp)
             raise ValueError(f"Kotak Neo Step 2 (MPIN) failed: {err_msg or 'Invalid MPIN. Please enter your 6-digit Kotak Neo MPIN.'}")
 
         _KOTAK_CLIENT = client
