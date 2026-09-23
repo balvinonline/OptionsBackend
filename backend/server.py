@@ -545,17 +545,21 @@ def save_env_value(env_path, key, value):
 
 
 def extract_fyers_auth_code(value):
-    text = str(value or "").strip()
+    text = str(value or "").strip().strip('"').strip("'")
     if not text:
         return ""
 
-    match_auth = re.search(r"auth_code=([^&\s]+)", text)
+    match_auth = re.search(r"[?&#]auth_code=([^&#\s]+)", text)
     if match_auth:
         return match_auth.group(1).strip()
         
-    match_code = re.search(r"[?&]code=([^&\s]+)", text)
+    match_code = re.search(r"[?&#]code=([^&#\s]+)", text)
     if match_code:
         return match_code.group(1).strip()
+
+    # If it is a full redirect URL but has no auth_code, do NOT treat the URL itself as the code!
+    if "trade.fyers.in" in text or text.startswith("http://") or text.startswith("https://"):
+        return ""
 
     return text
 
@@ -568,11 +572,31 @@ def get_fyers_redirect_uri():
 
 
 
-def validate_fyers_session_token():
+_FYERS_VALIDATION_CACHE = {
+    "valid": False,
+    "error": "",
+    "cached_at": 0.0,
+    "token_fingerprint": "",
+}
+
+
+def validate_fyers_session_token(force_check=False):
     """Validate the token with FYERS instead of treating SDK construction as authentication."""
-    refresh_fyers_from_env(force=True)
-    if not fyers:
+    global _FYERS_VALIDATION_CACHE
+    refresh_fyers_from_env(force=force_check)
+    if not fyers or not FYERS_ACCESS_TOKEN:
         return False, "FYERS client is not initialized"
+
+    now = time.time()
+    token_fingerprint = str(FYERS_ACCESS_TOKEN or "")[-20:]
+    # If cached recently (< 30s) for the same token, return cached validation result immediately
+    if (
+        not force_check
+        and _FYERS_VALIDATION_CACHE["valid"]
+        and (now - _FYERS_VALIDATION_CACHE["cached_at"] < 30.0)
+        and _FYERS_VALIDATION_CACHE["token_fingerprint"] == token_fingerprint
+    ):
+        return True, ""
 
     try:
         resp = fyers.get_profile() or {}
@@ -581,8 +605,20 @@ def validate_fyers_session_token():
             code = resp.get("code")
             data = resp.get("data")
             if status == "ok" or code == 200 or (isinstance(data, dict) and bool(data)):
+                _FYERS_VALIDATION_CACHE = {
+                    "valid": True,
+                    "error": "",
+                    "cached_at": now,
+                    "token_fingerprint": token_fingerprint,
+                }
                 return True, ""
             message = str(resp.get("message") or resp.get("error") or "FYERS rejected the current access token")
+            _FYERS_VALIDATION_CACHE = {
+                "valid": False,
+                "error": message,
+                "cached_at": now,
+                "token_fingerprint": token_fingerprint,
+            }
             return False, message
         return False, "Unexpected FYERS profile response"
     except Exception as exc:
@@ -7988,7 +8024,7 @@ def fyers_place_order():
 
 @app.route("/api/fyers/save-token", methods=["POST"])
 def fyers_save_token():
-    global _QUOTE_COOLDOWN_UNTIL, FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME
+    global _QUOTE_COOLDOWN_UNTIL, FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME, _FYERS_VALIDATION_CACHE
     load_dotenv(dotenv_path=ENV_PATH, override=True)
     payload = request.get_json(silent=True) or {}
     direct_token = (payload.get("accessToken") or payload.get("token") or "").strip()
@@ -8005,11 +8041,19 @@ def fyers_save_token():
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
         refresh_fyers_from_env(force=True)
+        _FYERS_VALIDATION_CACHE = {
+            "valid": True,
+            "error": "",
+            "cached_at": time.time(),
+            "token_fingerprint": str(access_token or "")[-20:],
+        }
         _QUOTE_COOLDOWN_UNTIL = 0.0
         clear_live_market_caches()
         return jsonify({
             "ok": True,
             "message": "Fyers access token saved and connection initialized.",
+            "tokenValid": True,
+            "tokenValidationError": None,
             **get_fyers_env_status(),
         })
 
@@ -8045,11 +8089,19 @@ def fyers_save_token():
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
         refresh_fyers_from_env(force=True)
+        _FYERS_VALIDATION_CACHE = {
+            "valid": True,
+            "error": "",
+            "cached_at": time.time(),
+            "token_fingerprint": str(access_token or "")[-20:],
+        }
         _QUOTE_COOLDOWN_UNTIL = 0.0
         clear_live_market_caches()
         return jsonify({
             "ok": True,
             "message": "Fyers token generated and connection initialized.",
+            "tokenValid": True,
+            "tokenValidationError": None,
             **get_fyers_env_status(),
         })
     except Exception as e:
