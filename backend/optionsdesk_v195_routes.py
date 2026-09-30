@@ -8,6 +8,7 @@ Features:
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import re
 import threading
@@ -20,6 +21,7 @@ import requests
 from flask import jsonify, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+logger = logging.getLogger("kotakneo")
 _AUTH_SALT = "optionsdesk-mobile-auth-v195"
 _KOTAK_LOCK = threading.RLock()
 _KOTAK_CLIENT = None
@@ -101,11 +103,9 @@ def _get_totp_secret() -> str:
         "KOTAK_TOTP_KEY",
         "KOTAK_NEO_TOTP",
         "KOTAK_TOTP",
-        "KOTAK_SECRET_KEY",
         "NEO_TOTP",
         "NEO_TOTP_KEY",
         "NEO_TOTP_SECRET",
-        "KOTAK_NEO_SECRET",
         "KOTAK_NEO_API_TOTP",
         "NEO_TOTP_TOKEN",
     ]
@@ -113,12 +113,11 @@ def _get_totp_secret() -> str:
         val = os.getenv(var, "").replace(" ", "").strip()
         if val:
             return val
-    # Dynamic scan: MUST NOT match FYERS, and MUST contain KOTAK or NEO
     for k, v in os.environ.items():
         k_upper = k.upper()
-        if "FYERS" in k_upper:
+        if "FYERS" in k_upper or "CONSUMER" in k_upper or "CLIENT_SECRET" in k_upper:
             continue
-        if ("KOTAK" in k_upper or "NEO" in k_upper) and ("TOTP" in k_upper or "SECRET" in k_upper):
+        if ("KOTAK" in k_upper or "NEO" in k_upper) and "TOTP" in k_upper:
             cleaned = v.replace(" ", "").strip()
             if len(cleaned) >= 14:
                 return cleaned
@@ -184,15 +183,23 @@ def _get_auto_totp() -> str:
         return ""
     try:
         import pyotp
-        clean_secret = secret.replace(" ", "").strip().upper()
-        return str(pyotp.TOTP(clean_secret).now()).strip()
+        clean_secret = re.sub(r'[^A-Za-z2-7]', '', secret.upper())
+        if not clean_secret or len(clean_secret) < 8:
+            clean_secret = secret.replace(" ", "").strip().upper()
+        code = str(pyotp.TOTP(clean_secret).now()).strip()
+        if len(code) == 6 and code.isdigit():
+            return code
+        return ""
     except Exception as e:
-        logger.warning(f"Could not calculate TOTP from secret key: {e}")
+        try:
+            logger.warning(f"Could not calculate TOTP from secret key: {e}")
+        except Exception:
+            pass
         return ""
 
 
 def _is_auto_totp_configured() -> bool:
-    return bool(_get_totp_secret() and _get_mpin_from_env())
+    return bool(_get_auto_totp() and _get_mpin_from_env())
 
 
 def _kotak_config():
