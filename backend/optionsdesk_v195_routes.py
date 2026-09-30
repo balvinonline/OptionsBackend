@@ -505,6 +505,34 @@ def register_optionsdesk_v195_routes(app):
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
+
+    @app.route("/api/kotakneo/limits", methods=["GET"])
+    @_require_mobile_auth
+    def kotakneo_limits():
+        global _KOTAK_CLIENT
+        config = _kotak_config()
+        if (not config["sessionReady"] or _KOTAK_CLIENT is None) and config.get("autoTotpConfigured"):
+            try:
+                _perform_kotak_login()
+                config = _kotak_config()
+            except Exception:
+                pass
+        if not config["sessionReady"] or _KOTAK_CLIENT is None:
+            return jsonify({"ok": False, "error": "Kotak Neo trading session is not connected"}), 401
+        try:
+            with _KOTAK_LOCK:
+                resp = _KOTAK_CLIENT.limits()
+            cash = 0.0
+            if isinstance(resp, dict):
+                data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+                cash = _as_float(data.get("availableCash") or data.get("cash") or data.get("net") or data.get("collateral") or data.get("availableMargin")) or 0.0
+            elif isinstance(resp, list) and len(resp) > 0 and isinstance(resp[0], dict):
+                row = resp[0]
+                cash = _as_float(row.get("availableCash") or row.get("cash") or row.get("net") or row.get("availableMargin")) or 0.0
+            return jsonify({"ok": True, "availableCash": cash, "cash": cash, "net": cash, "data": resp})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
     @app.route("/api/kotakneo/order", methods=["POST"])
     @_require_mobile_auth
     def kotakneo_order():
@@ -525,10 +553,11 @@ def register_optionsdesk_v195_routes(app):
 
         if not config["sessionReady"] or _KOTAK_CLIENT is None:
             return jsonify({"ok": False, "error": "Kotak Neo trading session is not connected"}), 401
-        if not _market_open_now() and not _env_bool("OPTIONSDESK_ALLOW_AMO", False):
-            return jsonify({"ok": False, "error": "Live orders are blocked outside regular market hours"}), 409
 
         body = request.get_json(silent=True) or {}
+        is_amo = str(body.get("amo") or "").upper() == "YES" or not _market_open_now()
+        if not _market_open_now() and not _env_bool("OPTIONSDESK_ALLOW_AMO", True) and not is_amo:
+            return jsonify({"ok": False, "error": "Live orders outside regular market hours must be confirmed as AMO"}), 409
         if body.get("confirmLive") is not True:
             return jsonify({"ok": False, "error": "Explicit live-order confirmation is required"}), 400
         client_order_id = str(body.get("clientOrderId") or "").strip()
@@ -581,7 +610,7 @@ def register_optionsdesk_v195_routes(app):
                     validity="DAY",
                     trading_symbol=trading_symbol,
                     transaction_type=transaction,
-                    amo="NO",
+                    amo="YES" if is_amo else "NO",
                     disclosed_quantity="0",
                     trigger_price=str(body.get("triggerPrice") or "0"),
                 )
