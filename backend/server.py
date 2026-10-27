@@ -505,6 +505,55 @@ def normalize_fyers_access_token(client_id, access_token):
         return token.split(":", 1)[1].strip()
     return token
 
+def get_request_fyers_client():
+    """
+    Returns an active FyersModel instance.
+    Checks:
+    1. Header 'x-fyers-token' or 'X-Fyers-Token' from incoming HTTP request.
+    2. Header 'Authorization: Bearer <token>'
+    3. Query parameter 'fyers_token'
+    4. Falls back to global server env token.
+    This guarantees that client-side tokens are NEVER wiped by Render restarts!
+    """
+    global FYERS_CLIENT_ID, fyersModel, fyers
+    if not fyersModel:
+        return None
+    client_id = (os.getenv("FYERS_CLIENT_ID", "") or FYERS_CLIENT_ID).strip()
+    if not client_id:
+        return None
+
+    req_token = None
+    try:
+        from flask import request, has_request_context
+        if has_request_context():
+            req_token = request.headers.get("x-fyers-token") or request.headers.get("X-Fyers-Token")
+            if not req_token:
+                auth = request.headers.get("Authorization", "")
+                if auth.lower().startswith("bearer "):
+                    possible = auth[7:].strip()
+                    if len(possible) > 80:
+                        req_token = possible
+            if not req_token:
+                req_token = request.args.get("fyers_token")
+    except Exception:
+        pass
+
+    if req_token:
+        clean_token = normalize_fyers_access_token(client_id, req_token)
+        if clean_token:
+            inst = fyersModel.FyersModel(
+                client_id=client_id,
+                is_async=False,
+                token=clean_token,
+                log_path=""
+            )
+            configure_fyers_timeout(inst)
+            return inst
+
+    refresh_fyers_from_env()
+    return fyers
+
+
 
 def looks_like_raw_fyers_auth_code(value):
     token = str(value or "").strip().strip('"').strip("'")
@@ -583,8 +632,8 @@ _FYERS_VALIDATION_CACHE = {
 def validate_fyers_session_token(force_check=False):
     """Validate the token with FYERS instead of treating SDK construction as authentication."""
     global _FYERS_VALIDATION_CACHE
-    refresh_fyers_from_env(force=force_check)
-    if not fyers or not FYERS_ACCESS_TOKEN:
+    active_client = get_request_fyers_client()
+    if not active_client or not getattr(active_client, "token", None):
         return False, "FYERS client is not initialized"
 
     now = time.time()
@@ -599,7 +648,7 @@ def validate_fyers_session_token(force_check=False):
         return True, ""
 
     try:
-        resp = fyers.get_profile() or {}
+        resp = (active_client or fyers).get_profile() or {}
         if isinstance(resp, dict):
             status = str(resp.get("s") or "").strip().lower()
             code = resp.get("code")
@@ -701,7 +750,8 @@ def fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=375):
         raw_symbol = sanitize_fyers_history_symbol(symbol_key)
         if symbol_key not in INDEX_MAP and not raw_symbol:
             return {"ok": False, "error": "Unsupported symbol."}
-        if not fyers:
+        active_client = get_request_fyers_client()
+        if not active_client:
             return {"ok": False, "error": "FYERS client not initialized."}
 
         cfg = INDEX_MAP.get(symbol_key) or {"label": symbol_key}
@@ -763,7 +813,7 @@ def fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=375):
                         "cont_flag": "1",
                     }
                     time.sleep(0.4)
-                    resp = fyers.history(payload) or {}
+                    resp = (active_client or fyers).history(payload) or {}
                     
                     last_response = resp
                     attempts.append({
@@ -2375,8 +2425,8 @@ def get_change_pct_from_quote(block):
 
 def get_quote_block(symbol):
     global _QUOTE_COOLDOWN_UNTIL
-    refresh_fyers_from_env()
-    if not fyers:
+    active_client = get_request_fyers_client()
+    if not active_client:
         return {}
 
     cached = get_cached_quote_block(symbol)
@@ -2387,7 +2437,7 @@ def get_quote_block(symbol):
         return get_stale_quote_block(symbol)
 
     try:
-        resp = fyers.quotes({"symbols": symbol})
+        resp = (active_client or fyers).quotes({"symbols": symbol})
         if quote_response_rate_limited(resp):
             _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
             return get_stale_quote_block(symbol)
@@ -7194,7 +7244,7 @@ def get_previous_day_levels(symbol, fallback_symbol=None, cache_key=None, cache_
                 "cont_flag": "1",
             }
 
-            resp = fyers.history(payload) or {}
+            resp = (active_client or fyers).history(payload) or {}
             candles = resp.get("candles", []) or []
 
             cleaned = []
@@ -7877,7 +7927,7 @@ def debug_fyers_quote():
         }), 200
 
     try:
-        resp = fyers.quotes({"symbols": symbol})
+        resp = (active_client or fyers).quotes({"symbols": symbol})
         return jsonify({
             "ok": isinstance(resp, dict) and resp.get("s") == "ok",
             "marketOpen": True,
@@ -8053,6 +8103,8 @@ def fyers_save_token():
             "ok": True,
             "message": "Fyers access token saved and connection initialized.",
             "tokenValid": True,
+            "accessToken": access_token,
+            "access_token": access_token,
             "tokenValidationError": None,
             **get_fyers_env_status(),
         })
@@ -8101,6 +8153,8 @@ def fyers_save_token():
             "ok": True,
             "message": "Fyers token generated and connection initialized.",
             "tokenValid": True,
+            "accessToken": access_token,
+            "access_token": access_token,
             "tokenValidationError": None,
             **get_fyers_env_status(),
         })
