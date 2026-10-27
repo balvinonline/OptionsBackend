@@ -8178,6 +8178,90 @@ def fyers_save_totp_credentials():
     })
 
 
+YAHOO_INDEX_MAP = {
+    "NIFTY": "^NSEI",
+    "BANKNIFTY": "^NSEBANK",
+    "SENSEX": "^BSESN",
+    "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
+    "MIDCPNIFTY": "NIFTY_MID_SELECT.NS",
+    "BANKEX": "BSE-BANK.BO",
+    "INDIAVIX": "^INDIAVIX",
+}
+
+def fetch_yahoo_history(symbol_key, resolution="5"):
+    sym = str(symbol_key or "NIFTY").strip().upper()
+    ticker = YAHOO_INDEX_MAP.get(sym)
+    if not ticker:
+        clean = sym.replace("NSE:", "").replace("BSE:", "").replace("-EQ", "").replace("-INDEX", "")
+        ticker = YAHOO_INDEX_MAP.get(clean) or (clean if (clean.endswith(".NS") or clean.endswith(".BO") or clean.startswith("^")) else f"{clean}.NS")
+
+    res = str(resolution or "5").upper()
+    range_map = {
+        "1": ("5d", "1m"),
+        "2": ("5d", "2m"),
+        "3": ("5d", "5m"),
+        "5": ("5d", "5m"),
+        "10": ("5d", "5m"),
+        "15": ("1mo", "15m"),
+        "30": ("1mo", "30m"),
+        "60": ("3mo", "60m"),
+        "D": ("1y", "1d"),
+        "1D": ("1y", "1d"),
+    }
+    range_param, interval = range_map.get(res, ("5d", "5m"))
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={range_param}&interval={interval}"
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=8)
+        data = r.json()
+        result = (data.get("chart", {}).get("result") or [None])[0]
+        if not result:
+            return None
+        timestamps = result.get("timestamp") or []
+        quotes = (result.get("indicators", {}).get("quote") or [{}])[0]
+        opens = quotes.get("open") or []
+        highs = quotes.get("high") or []
+        lows = quotes.get("low") or []
+        closes = quotes.get("close") or []
+        volumes = quotes.get("volume") or []
+        candles = []
+        for i in range(len(timestamps)):
+            if i < len(closes) and closes[i] is not None and not math.isnan(closes[i]):
+                o = opens[i] if (i < len(opens) and opens[i] is not None) else closes[i]
+                h = highs[i] if (i < len(highs) and highs[i] is not None) else closes[i]
+                l = lows[i] if (i < len(lows) and lows[i] is not None) else closes[i]
+                c = closes[i]
+                v = volumes[i] if (i < len(volumes) and volumes[i] is not None) else 1000
+                candles.append({
+                    "ts": int(timestamps[i]),
+                    "open": round(float(o), 2),
+                    "high": round(float(max(h, o, c)), 2),
+                    "low": round(float(min(l, o, c)), 2),
+                    "close": round(float(c), 2),
+                    "volume": int(v) if v else 1000,
+                })
+        if candles:
+            return {
+                "ok": True,
+                "symbol": symbol_key,
+                "source": "yahoo_live_exchange",
+                "candles": candles,
+            }
+    except Exception as e:
+        print(f"[Yahoo History] Failover error for {symbol_key}: {e}")
+    return None
+
+@app.route("/api/yahoo-history")
+def yahoo_history():
+    symbol = request.args.get("symbol", "^NSEI").strip()
+    range_param = request.args.get("range", "5d").strip()
+    interval = request.args.get("interval", "5m").strip()
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{requests.utils.quote(symbol)}?range={range_param}&interval={interval}"
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}, timeout=8)
+        return jsonify(r.json()), r.status_code
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.route("/api/fyers/history")
 def fyers_history():
     symbol = request.args.get("symbol", "NIFTY").strip().upper()
@@ -8201,7 +8285,12 @@ def fyers_history():
     lookback = safe_int(request.args.get("lookback"), 375)
     max_lookback = 180 * 24 * 60 if resolution in {"D", "1D"} else 90 * 24 * 60
     lookback = max(90, min(lookback or 375, max_lookback))
-    return jsonify(fetch_fyers_history(history_symbol, resolution=resolution, lookback_minutes=lookback))
+    fyers_res = fetch_fyers_history(history_symbol, resolution=resolution, lookback_minutes=lookback)
+    if not fyers_res or not fyers_res.get("ok") or not fyers_res.get("candles"):
+        yahoo_res = fetch_yahoo_history(symbol, resolution=resolution)
+        if yahoo_res and yahoo_res.get("candles"):
+            return jsonify(yahoo_res)
+    return jsonify(fyers_res)
 
 
 @app.route("/api/fyers/quote")
