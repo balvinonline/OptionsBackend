@@ -822,10 +822,10 @@ def fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=375):
                 set_cached("fyers_history", result, key=key)
                 return result
 
-        fallback = build_quote_fallback_history(symbol_key, fyers_resolution) if symbol_key in INDEX_MAP else None
-        if fallback:
-            set_cached("fyers_history", fallback, key=key)
-            return fallback
+        yahoo_fallback = fetch_yahoo_history(symbol_key, fyers_resolution) if symbol_key in INDEX_MAP else None
+        if yahoo_fallback and yahoo_fallback.get("candles"):
+            set_cached("fyers_history", yahoo_fallback, key=key)
+            return yahoo_fallback
 
         return {
             "ok": False,
