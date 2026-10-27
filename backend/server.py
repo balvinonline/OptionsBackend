@@ -8817,6 +8817,16 @@ def option_chain():
                     "expiryDetails": catalog,
                 }), 400
 
+        broker_param = (request.args.get("broker") or "auto").strip().lower()
+        if broker_param == "kotakneo":
+            try:
+                from optionsdesk_v195_routes import get_kotak_option_chain_data
+                kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
+                if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
+                    return jsonify(kotak_chain)
+            except Exception as e:
+                logger.warning(f"Direct Kotak Neo option chain for {symbol} failed: {e}")
+
         dashboard_data = build_dashboard(
             symbol,
             expiry_timestamp=(selected or {}).get("timestamp"),
@@ -8824,7 +8834,27 @@ def option_chain():
             expiry_catalog=catalog,
         )
 
+
+        chain_data = dashboard_data.get("optionChain") or dashboard_data.get("data") or []
+        if (not chain_data or len(chain_data) == 0) and broker_param != "fyers":
+            try:
+                from optionsdesk_v195_routes import get_kotak_option_chain_data
+                kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
+                if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
+                    dashboard_data["optionChain"] = kotak_chain["optionChain"]
+                    dashboard_data["data"] = kotak_chain["optionChain"]
+                    dashboard_data["broker"] = "kotakneo"
+                    dashboard_data["dataSource"] = "kotakneo_live"
+                    if not dashboard_data.get("selectedExpiry"):
+                        dashboard_data["selectedExpiry"] = kotak_chain.get("selectedExpiry")
+                    if not dashboard_data.get("expiries"):
+                        dashboard_data["expiries"] = kotak_chain.get("expiries")
+            except Exception as e:
+                logger.warning(f"Kotak Neo failover for {symbol} failed: {e}")
+
         return jsonify({
+            "broker": dashboard_data.get("broker") or "fyers",
+            "dataSource": dashboard_data.get("dataSource") or "fyers_live",
             "symbol": dashboard_data["symbol"],
             "label": dashboard_data["label"],
             "timestamp": dashboard_data["timestamp"],

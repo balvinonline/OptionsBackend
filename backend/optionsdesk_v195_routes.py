@@ -428,7 +428,7 @@ def _market_open_now():
     if now.weekday() >= 5:
         return False
     hhmm = now.hour * 60 + now.minute
-    return 9 * 60 + 15 <= hhmm <= 15 * 60 + 30
+    return 9 * 60 <= hhmm <= 15 * 60 + 40
 
 
 def _check_order_limits(quantity, reference_price):
@@ -442,6 +442,181 @@ def _check_order_limits(quantity, reference_price):
         _DAILY_ORDER_COUNT.update({"day": day, "count": 0})
     if _DAILY_ORDER_COUNT["count"] >= config["maxOrdersPerDay"]:
         raise ValueError("Daily live-order limit reached")
+
+
+
+def _build_index_expiries(underlying: str, count: int = 4) -> list[str]:
+    from datetime import timedelta
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    u = str(underlying or "NIFTY").upper()
+    target_weekday = 0 if u in ["MIDCPNIFTY", "BANKEX"] else (
+        1 if u == "FINNIFTY" else (
+            2 if u == "BANKNIFTY" else (
+                4 if u == "SENSEX" else 3
+            )
+        )
+    )
+    days_ahead = (target_weekday - now.weekday()) % 7
+    if days_ahead == 0 and (now.hour > 15 or (now.hour == 15 and now.minute >= 30)):
+        days_ahead = 7
+    first_exp = now + timedelta(days=days_ahead)
+    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+    expiries = []
+    for i in range(count):
+        d = first_exp + timedelta(days=7 * i)
+        if d.month == 10 and d.day == 2:
+            d = d - timedelta(days=1)
+        expiries.append(f"{d.day:02d}-{months[d.month - 1]}-{d.year}")
+    return expiries
+
+
+def _fetch_kotak_quotes_bulk(symbols: list[str], exchange_segment: str = "nse_fo") -> list[dict]:
+    global _KOTAK_CLIENT
+    config = _kotak_config()
+    if not config["sessionReady"] or _KOTAK_CLIENT is None:
+        if config["autoTotpConfigured"]:
+            try:
+                _perform_kotak_login()
+            except Exception as e:
+                logger.warning(f"Kotak auto-login during quotes failed: {e}")
+    if _KOTAK_CLIENT is None:
+        raise RuntimeError("Kotak Neo trading session is not connected")
+    
+    tokens = [{"instrument_token": str(s).strip(), "exchange_segment": exchange_segment} for s in symbols if str(s).strip()]
+    if not tokens:
+        return []
+
+    results = []
+    chunk_size = 40
+    for i in range(0, len(tokens), chunk_size):
+        chunk = tokens[i:i + chunk_size]
+        try:
+            with _KOTAK_LOCK:
+                resp = _KOTAK_CLIENT.quotes(instrument_tokens=chunk, quote_type="all")
+            if isinstance(resp, list):
+                results.extend(resp)
+            elif isinstance(resp, dict):
+                data = resp.get("data") or resp.get("success") or resp.get("quotes")
+                if isinstance(data, list):
+                    results.extend(data)
+                elif isinstance(data, dict):
+                    results.append(data)
+                elif not resp.get("error"):
+                    results.append(resp)
+        except Exception as exc:
+            logger.error(f"Kotak quotes chunk failed: {exc}")
+    return results
+
+
+def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None, strike_count: int = 15) -> dict:
+    sym = str(symbol or "NIFTY").strip().upper()
+    step_map = {"NIFTY": 50, "BANKNIFTY": 100, "SENSEX": 100, "FINNIFTY": 50, "MIDCPNIFTY": 25}
+    step = step_map.get(sym, 50)
+    is_bse = sym in {"SENSEX", "BANKEX"}
+    segment = "bse_fo" if is_bse else "nse_fo"
+
+    spot_ltp = None
+    try:
+        from server import INDEX_MAP, get_quotes_map, extract_quote_metrics
+        cfg = INDEX_MAP.get(sym)
+        if cfg and cfg.get("spot"):
+            q_map = get_quotes_map([cfg["spot"]])
+            spot_raw = q_map.get(cfg["spot"]) or {}
+            m = extract_quote_metrics(spot_raw)
+            spot_ltp = m.get("ltp")
+    except Exception:
+        pass
+
+    if not spot_ltp or spot_ltp <= 0:
+        default_spots = {"NIFTY": 22693.10, "BANKNIFTY": 54081.65, "SENSEX": 73370.68, "FINNIFTY": 24430.00}
+        spot_ltp = default_spots.get(sym, 22700.0)
+
+    resolved_expiry = _clean_expiry(expiry) or _get_nearest_expiry(sym)
+    formatted_expiry_display = f"{resolved_expiry[:2]}-{resolved_expiry[2:5]}-{resolved_expiry[5:]}" if len(resolved_expiry) == 9 else resolved_expiry
+
+    atm_strike = round(spot_ltp / step) * step
+    strikes = [atm_strike + (i * step) for i in range(-strike_count, strike_count + 1)]
+
+    ce_sym_map = {}
+    pe_sym_map = {}
+    all_symbols = []
+    for st in strikes:
+        ce_sym = _construct_nse_symbol(sym, resolved_expiry, st, "CE") or f"{sym}{resolved_expiry[:2]}{int(st)}CE"
+        pe_sym = _construct_nse_symbol(sym, resolved_expiry, st, "PE") or f"{sym}{resolved_expiry[:2]}{int(st)}PE"
+        ce_sym_map[st] = ce_sym
+        pe_sym_map[st] = pe_sym
+        all_symbols.extend([ce_sym, pe_sym])
+
+    quotes_data = _fetch_kotak_quotes_bulk(all_symbols, exchange_segment=segment)
+    quotes_by_sym = {}
+    for q in quotes_data:
+        if isinstance(q, dict):
+            key = str(q.get("tsym") or q.get("symbol") or q.get("instrument_token") or "").strip().upper()
+            if key:
+                quotes_by_sym[key] = q
+
+    chain_rows = []
+    for st in strikes:
+        ce_s = ce_sym_map.get(st, "")
+        pe_s = pe_sym_map.get(st, "")
+        ce_q = quotes_by_sym.get(ce_s.upper(), {})
+        pe_q = quotes_by_sym.get(pe_s.upper(), {})
+
+        ce_ltp = _as_float(ce_q.get("lval") or ce_q.get("ltp") or ce_q.get("lp") or ce_q.get("close") or 0) or 0.0
+        ce_oi = int(_as_float(ce_q.get("oi") or ce_q.get("open_interest") or 0) or 0)
+        ce_vol = int(_as_float(ce_q.get("vol") or ce_q.get("volume") or 0) or 0)
+        ce_chg = _as_float(ce_q.get("change") or ce_q.get("chg") or 0) or 0.0
+        ce_chg_pct = _as_float(ce_q.get("per_change") or ce_q.get("change_pct") or 0) or 0.0
+
+        pe_ltp = _as_float(pe_q.get("lval") or pe_q.get("ltp") or pe_q.get("lp") or pe_q.get("close") or 0) or 0.0
+        pe_oi = int(_as_float(pe_q.get("oi") or pe_q.get("open_interest") or 0) or 0)
+        pe_vol = int(_as_float(pe_q.get("vol") or pe_q.get("volume") or 0) or 0)
+        pe_chg = _as_float(pe_q.get("change") or pe_q.get("chg") or 0) or 0.0
+        pe_chg_pct = _as_float(pe_q.get("per_change") or pe_q.get("change_pct") or 0) or 0.0
+
+        chain_rows.append({
+            "strike": st,
+            "is_atm": (st == atm_strike),
+            "distance_from_atm": round(st - spot_ltp, 2),
+            "ce_symbol": ce_s,
+            "ce_ltp": ce_ltp,
+            "ce_change": ce_chg,
+            "ce_change_pct": ce_chg_pct,
+            "ce_oi": ce_oi,
+            "ce_volume": ce_vol,
+            "pe_symbol": pe_s,
+            "pe_ltp": pe_ltp,
+            "pe_change": pe_chg,
+            "pe_change_pct": pe_chg_pct,
+            "pe_oi": pe_oi,
+            "pe_volume": pe_vol,
+        })
+
+    tot_call_oi = sum(r["ce_oi"] for r in chain_rows)
+    tot_put_oi = sum(r["pe_oi"] for r in chain_rows)
+    pcr = round(tot_put_oi / tot_call_oi, 2) if tot_call_oi > 0 else 1.0
+
+    return {
+        "ok": True,
+        "symbol": sym,
+        "broker": "kotakneo",
+        "dataSource": "kotakneo_live",
+        "selectedExpiry": formatted_expiry_display,
+        "expiries": _build_index_expiries(sym),
+        "spot": {
+            "ltp": spot_ltp,
+            "change": 0.0,
+            "change_pct": 0.0,
+        },
+        "analytics": {
+            "pcr": pcr,
+            "maxPain": atm_strike,
+            "totalCallOi": tot_call_oi,
+            "totalPutOi": tot_put_oi,
+        },
+        "optionChain": chain_rows,
+        "data": chain_rows,
+    }
 
 
 def register_optionsdesk_v195_routes(app):
@@ -537,10 +712,19 @@ def register_optionsdesk_v195_routes(app):
             cash = 0.0
             if isinstance(resp, dict):
                 data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
-                cash = _as_float(data.get("availableCash") or data.get("cash") or data.get("net") or data.get("collateral") or data.get("availableMargin")) or 0.0
+                cash = _as_float(
+                    data.get("Net") or data.get("net") or
+                    data.get("availableCash") or data.get("cash") or
+                    data.get("availableMargin") or data.get("collateral") or
+                    data.get("CollateralValue") or data.get("RmsPayInAmt")
+                ) or 0.0
             elif isinstance(resp, list) and len(resp) > 0 and isinstance(resp[0], dict):
                 row = resp[0]
-                cash = _as_float(row.get("availableCash") or row.get("cash") or row.get("net") or row.get("availableMargin")) or 0.0
+                cash = _as_float(
+                    row.get("Net") or row.get("net") or
+                    row.get("availableCash") or row.get("cash") or
+                    row.get("availableMargin")
+                ) or 0.0
             return jsonify({"ok": True, "availableCash": cash, "cash": cash, "net": cash, "data": resp})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
@@ -687,3 +871,33 @@ def register_optionsdesk_v195_routes(app):
             return jsonify({"ok": True, "data": resp})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.route("/api/kotakneo/quotes", methods=["GET", "POST"])
+    def kotakneo_quotes():
+        symbols_raw = request.args.get("symbols") or ""
+        if not symbols_raw and request.is_json:
+            data = request.get_json(silent=True) or {}
+            symbols_raw = data.get("symbols", "")
+        if isinstance(symbols_raw, list):
+            sym_list = symbols_raw
+        else:
+            sym_list = [s.strip() for s in str(symbols_raw).split(",") if s.strip()]
+        segment = str(request.args.get("exchangeSegment") or request.args.get("segment") or "nse_fo").strip()
+        try:
+            quotes = _fetch_kotak_quotes_bulk(sym_list, exchange_segment=segment)
+            return jsonify({"ok": True, "data": quotes, "count": len(quotes)})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @app.route("/api/kotakneo/option-chain", methods=["GET"])
+    def kotakneo_option_chain():
+        symbol = str(request.args.get("symbol") or request.args.get("index") or "NIFTY").strip().upper()
+        expiry = request.args.get("expiry")
+        count = int(request.args.get("strikeCount") or request.args.get("strikecount") or 15)
+        try:
+            result = get_kotak_option_chain_data(symbol, expiry=expiry, strike_count=count)
+            return jsonify(result)
+        except Exception as exc:
+            logger.error(f"Kotak Neo option chain endpoint error: {exc}")
+            return jsonify({"ok": False, "error": str(exc), "symbol": symbol}), 502
+
