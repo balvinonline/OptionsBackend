@@ -376,7 +376,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "v2.0.21-dual-broker-kotak-live-20261027-fix1"
+SERVER_BUILD_MARKER = "v2.0.21-dual-broker-kotak-live-20261027-fix2"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
@@ -8825,7 +8825,7 @@ def option_chain():
                 if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
                     return jsonify(kotak_chain)
             except Exception as e:
-                logger.warning(f"Direct Kotak Neo option chain for {symbol} failed: {e}")
+                print(f"Direct Kotak Neo option chain for {symbol} failed: {e}")
 
         dashboard_data = build_dashboard(
             symbol,
@@ -8850,7 +8850,7 @@ def option_chain():
                     if not dashboard_data.get("expiries"):
                         dashboard_data["expiries"] = kotak_chain.get("expiries")
             except Exception as e:
-                logger.warning(f"Kotak Neo failover for {symbol} failed: {e}")
+                print(f"Kotak Neo failover for {symbol} failed: {e}")
 
         return jsonify({
             "broker": dashboard_data.get("broker") or "fyers",
