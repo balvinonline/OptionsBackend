@@ -17,5 +17,5 @@ PyJWT
 structlog
 python-decouple
 pydantic
-
-kotakneoapi==3.0.1
+pandas
+tenacity
