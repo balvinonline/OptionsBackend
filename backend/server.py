@@ -376,7 +376,7 @@ def api_check_auth():
             return jsonify({"success": True, "username": ACTIVE_TOKENS[token]})
     return jsonify({"success": False}), 401
 
-SERVER_BUILD_MARKER = "v2.0.21-dual-broker-kotak-live-20261027-fix2"
+SERVER_BUILD_MARKER = "v2.0.21-dual-broker-kotak-live-20261027-fix3"
 HISTORY_STORE_PATH = Path(__file__).resolve().parent / "dashboard_history.json"
 HISTORY_STORE_LOCK = threading.Lock()
 HISTORY_STORE_KEYS = ("pcrHistory", "optionSignalHistory", "signalJournal", "gateHistory")
@@ -8805,9 +8805,28 @@ def option_chain():
     try:
         selected = None
         catalog = None
+        broker_param = (request.args.get("broker") or "auto").strip().lower()
+        if broker_param == "kotakneo":
+            try:
+                from optionsdesk_v195_routes import get_kotak_option_chain_data
+                kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
+                if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
+                    return jsonify(kotak_chain)
+            except Exception as e:
+                print(f"Direct Kotak Neo option chain for {symbol} failed: {e}")
+
         if requested_expiry:
             catalog = get_option_expiry_catalog(symbol)
             selected = resolve_option_expiry(catalog, requested_expiry)
+            if selected is None and broker_param != "fyers":
+                try:
+                    from optionsdesk_v195_routes import get_kotak_option_chain_data
+                    kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
+                    if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
+                        return jsonify(kotak_chain)
+                except Exception as e:
+                    print(f"Kotak Neo requested expiry failover failed: {e}")
+
             if selected is None:
                 return jsonify({
                     "error": "Requested expiry is not available",
@@ -8816,8 +8835,6 @@ def option_chain():
                     "expiries": [item.get("date") for item in catalog if item.get("date")],
                     "expiryDetails": catalog,
                 }), 400
-
-        broker_param = (request.args.get("broker") or "auto").strip().lower()
         if broker_param == "kotakneo":
             try:
                 from optionsdesk_v195_routes import get_kotak_option_chain_data

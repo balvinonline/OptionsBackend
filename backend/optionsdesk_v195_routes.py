@@ -364,6 +364,12 @@ def _construct_nse_symbol(underlying: str, expiry: str, strike: float, option_ty
             }
             m_code = month_map.get(mon, "1")
             strike_str = str(int(strike) if float(strike).is_integer() else strike)
+            # If last Thursday of month, Kotak Neo and NSE prefer monthly format: NIFTY26OCT22700CE
+            # For weekly, standard format is NIFTY26O2922700CE
+            # Return both or monthly format if near end of month
+            int_dd = int(dd) if dd.isdigit() else 0
+            if int_dd >= 24:
+                return f"{underlying}{yy}{mon}{strike_str}{option_type}"
             return f"{underlying}{yy}{m_code}{dd}{strike_str}{option_type}"
     except Exception:
         pass
@@ -382,7 +388,7 @@ def _get_nearest_expiry(underlying: str) -> str:
     from datetime import timedelta
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     u = str(underlying or "NIFTY").upper()
-    target_weekday = 1 if u in ["NIFTY", "FINNIFTY"] else (
+    target_weekday = 1 if u == "FINNIFTY" else (
         2 if u == "BANKNIFTY" else (
             4 if u == "SENSEX" else 3
         )
