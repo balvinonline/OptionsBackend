@@ -8289,6 +8289,9 @@ def fyers_history():
     if not fyers_res or not fyers_res.get("ok") or not fyers_res.get("candles"):
         yahoo_res = fetch_yahoo_history(symbol, resolution=resolution)
         if yahoo_res and yahoo_res.get("candles"):
+            yahoo_res["fyers_attempts"] = (fyers_res or {}).get("attempts", [])
+            yahoo_res["fyers_response"] = (fyers_res or {}).get("response", {})
+            yahoo_res["fyers_error"] = (fyers_res or {}).get("error", "No candles")
             return jsonify(yahoo_res)
     return jsonify(fyers_res)
 
