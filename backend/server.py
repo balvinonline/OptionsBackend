@@ -9190,15 +9190,17 @@ def option_chain():
 
 
         chain_data = dashboard_data.get("optionChain") or dashboard_data.get("data") or []
-        if not chain_data or len(chain_data) == 0:
+        if (not chain_data or len(chain_data) == 0) and broker_param != "fyers":
             try:
                 from optionsdesk_v195_routes import get_kotak_option_chain_data
                 kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
                 if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
-                    dashboard_data["optionChain"] = kotak_chain["optionChain"]
-                    dashboard_data["data"] = kotak_chain["optionChain"]
-                    dashboard_data["broker"] = "kotakneo"
-                    dashboard_data["dataSource"] = "kotakneo_live"
+                    has_real_oi = any((safe_float(r.get("ce_oi"), 0) > 0 or safe_float(r.get("pe_oi"), 0) > 0) for r in kotak_chain["optionChain"])
+                    if has_real_oi:
+                        dashboard_data["optionChain"] = kotak_chain["optionChain"]
+                        dashboard_data["data"] = kotak_chain["optionChain"]
+                        dashboard_data["broker"] = "kotakneo"
+                        dashboard_data["dataSource"] = "kotakneo_live"
                     if not dashboard_data.get("selectedExpiry"):
                         dashboard_data["selectedExpiry"] = kotak_chain.get("selectedExpiry")
                     if not dashboard_data.get("expiries"):

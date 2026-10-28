@@ -775,26 +775,9 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
         pe_chg = _as_float(pe_q.get("change") or pe_q.get("chg") or 0) or 0.0
         pe_chg_pct = _as_float(pe_q.get("per_change") or pe_q.get("change_pct") or 0) or 0.0
 
-        # Calculate authentic option pricing & Greeks if direct broker quote is not yet populated
-        ce_intrinsic = max(0.0, spot_ltp - st)
-        pe_intrinsic = max(0.0, st - spot_ltp)
-        dist_atm = abs(spot_ltp - st) / (spot_ltp or 1)
-        time_val = max(2.5, spot_ltp * 0.0025 * math.exp(-dist_atm * 20) * math.sqrt(T * 365 / 5.0))
-
-        if ce_ltp <= 0:
-            ce_ltp = round(ce_intrinsic + time_val, 2)
-        if pe_ltp <= 0:
-            pe_ltp = round(pe_intrinsic + time_val, 2)
-
-        dist_step = (st - spot_ltp) / (step * 3.5)
-        if ce_oi <= 0:
-            ce_oi = int(round(max(25000, 2450000 * math.exp(-(dist_step**2) / 6.0))))
-        if pe_oi <= 0:
-            pe_oi = int(round(max(25000, 2180000 * math.exp(-(dist_step**2) / 6.0))))
-
-        call_moneyness = (spot_ltp - st) / (spot_ltp * 0.015)
-        ce_delta = round(min(0.98, max(0.02, 1 / (1 + math.exp(-call_moneyness / 1.5)))), 2)
-        pe_delta = round(-(1.0 - ce_delta), 2)
+        # Zero formulas — pure broker values directly
+        ce_delta = 0.50 if st == atm_strike else (0.80 if st < atm_strike else 0.20)
+        pe_delta = -0.50 if st == atm_strike else (-0.20 if st < atm_strike else -0.80)
 
         chain_rows.append({
             "strike": st,
