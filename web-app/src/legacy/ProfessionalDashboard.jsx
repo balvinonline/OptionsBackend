@@ -441,11 +441,25 @@ function getFyersChartCacheKey(symbol, resolution, scope = "index") {
 function isFreshChartPayload(payload, resolution = "5") {
   const candles = normalizeHistoryCandles(payload);
   if (!candles.length) return false;
+
   const latest = normalizeTimestampMs(candles[candles.length - 1]?.ts);
   if (!latest) return false;
+
   const key = String(resolution || "5").toUpperCase();
-  const maxAge = key === "D" || key === "1D" ? 10 * 24 * 60 * 60 * 1000 : 5 * 24 * 60 * 60 * 1000;
-  return Date.now() - latest <= maxAge;
+  if (key === "D" || key === "1D") {
+    return Date.now() - latest <= 10 * 24 * 60 * 60 * 1000;
+  }
+
+  if (isAfterMarketClose()) {
+    return Date.now() - latest <= 36 * 60 * 60 * 1000;
+  }
+
+  const minutes = Number(key);
+  if (!Number.isFinite(minutes) || minutes <= 0) return false;
+
+  const maxAge = Math.max(90 * 1000, minutes * 2 * 60 * 1000 + 30 * 1000);
+  const age = Date.now() - latest;
+  return age >= -60 * 1000 && age <= maxAge;
 }
 
 function loadCachedFyersChart(symbol, resolution, scope = "index") {
@@ -5686,12 +5700,14 @@ function getLiveCandleTrail(chartKey, baseLastTs, livePrice, resolution = "5") {
 function formatChartDateTime(time) {
   const seconds = typeof time === "object" ? Number(time?.timestamp || 0) : Number(time || 0);
   if (!seconds) return "";
-  const date = new Date(seconds * 1000);
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const month = date.toLocaleString("en-IN", { month: "short", timeZone: "UTC" });
-  const hours = String(date.getUTCHours()).padStart(2, "0");
-  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${day} ${month} ${hours}:${minutes}`;
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Kolkata",
+  }).format(new Date(seconds * 1000));
 }
 
 function FyersCandleChart({ candles = [], updatedAt = "", resolution = "5", livePrice, themeMode = "light", height = 540, title = "Fyers Full Chart", compact = false, sourceLabel = "", levels = [], showSignals = true, showLongSignals = true, showShortSignals = true, showVWAP = true, showZones = true, visibleBars = null }) {
@@ -5729,11 +5745,8 @@ function FyersCandleChart({ candles = [], updatedAt = "", resolution = "5", live
   const emaSeries = useRef(null);
   const markersRef = useRef(null);
   const chartIdentity = `${title}|${sourceLabel}|${resolution}`;
-  const normalizedCandles = normalizeHistoryCandles(candles);
-  const baseCandles = normalizedCandles.slice(compact ? -260 : -5000);
-  const baseLastTs = normalizeTimestampMs(baseCandles[baseCandles.length - 1]?.ts) || 0;
-  const visibleLiveTrail = getLiveCandleTrail(chartIdentity, baseLastTs, livePrice, resolution);
-  const clean = mergeLivePriceIntoCandles([...baseCandles, ...visibleLiveTrail], livePrice, resolution)
+  // Plot only OHLC candles returned by the history API; do not synthesize candles from quotes.
+  const clean = normalizeHistoryCandles(candles)
     .filter((row) => ["open", "high", "low", "close"].every((key) => isNum(row?.[key]) && Number(row[key]) > 0))
     .filter((row) => Number(row.high) >= Math.max(Number(row.open), Number(row.close)) && Number(row.low) <= Math.min(Number(row.open), Number(row.close)))
     .slice(compact ? -260 : -5000);
@@ -5743,13 +5756,12 @@ function FyersCandleChart({ candles = [], updatedAt = "", resolution = "5", live
   const move = isNum(last.close) && isNum(first.open) ? Number(last.close) - Number(first.open) : null;
 
   const chartDataMap = new Map();
-  let lastTime = 0;
-  clean.forEach((row, i) => {
-    let time = Math.floor(Number(row.ts) / 1000) + 19800; // Lightweight charts strictly requires Unix time in SECONDS + 5:30 IST offset
-    if (!time || isNaN(time)) time = 1781495100 + (i * 300); // Failsafe
-    if (time <= lastTime) time = lastTime + 300; // Failsafe for duplicates or out of order
-    lastTime = time;
+  clean.forEach((row) => {
+    const timestamp = normalizeTimestampMs(row.ts);
+    if (!timestamp) return;
 
+    // Lightweight Charts uses Unix seconds; do not add a timezone offset.
+    const time = Math.floor(timestamp / 1000);
     chartDataMap.set(time, {
       time,
       open: Number(row.open),
@@ -10925,7 +10937,7 @@ function ChartPopupContent({ detail = {}, symbol, pcrHistory = {}, optionSignalH
     const timer = window.setInterval(() => {
       if (isAfterMarketClose()) return;
       loadRealChart(true);
-    }, 45000);
+    }, 10000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
