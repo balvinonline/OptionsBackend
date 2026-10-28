@@ -712,19 +712,51 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
     except Exception:
         pass
 
-    if not spot_ltp or spot_ltp <= 0:
-        default_spots = {"NIFTY": 22693.10, "BANKNIFTY": 54081.65, "SENSEX": 73370.68, "FINNIFTY": 24430.00}
-        spot_ltp = default_spots.get(sym, 22700.0)
+    if spot_ltp is None or spot_ltp <= 0:
+        return {
+            "ok": False,
+            "error": "Live underlying price unavailable; option chain not generated",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "optionChain": [],
+            "data": [],
+        }
 
     master = _ensure_kotak_scrip_master()
     active_expiries = master.get("expiries", {}).get(sym, [])
-    if active_expiries:
-        if not expiry or (expiry not in active_expiries and _clean_expiry(expiry) not in [_clean_expiry(e) for e in active_expiries]):
-            resolved_expiry = active_expiries[0]
-        else:
-            resolved_expiry = expiry
+
+    if not active_expiries:
+        return {
+            "ok": False,
+            "error": "No verified Kotak Neo expiries available",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "optionChain": [],
+            "data": [],
+        }
+
+    if expiry:
+        requested_clean = _clean_expiry(expiry)
+        resolved_expiry = next(
+            (
+                item for item in active_expiries
+                if _clean_expiry(item) == requested_clean
+            ),
+            None,
+        )
+        if resolved_expiry is None:
+            return {
+                "ok": False,
+                "error": "Requested expiry is not available in Kotak Neo",
+                "symbol": sym,
+                "requestedExpiry": expiry,
+                "expiries": active_expiries,
+                "broker": "kotakneo",
+                "optionChain": [],
+                "data": [],
+            }
     else:
-        resolved_expiry = _clean_expiry(expiry) or _get_nearest_expiry(sym)
+        resolved_expiry = active_expiries[0]
 
     formatted_expiry_display = f"{resolved_expiry[:2]}-{resolved_expiry[2:5]}-{resolved_expiry[5:]}" if len(resolved_expiry) == 9 else resolved_expiry
 
