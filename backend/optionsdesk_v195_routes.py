@@ -665,10 +665,16 @@ def _fetch_kotak_quotes_bulk(symbols: list[str], exchange_segment: str = "nse_fo
         if not raw_s:
             continue
         c = by_tsym.get(raw_s)
-        tok = c["token"] if c and c.get("token") else raw_s
-        seg = c["exchangeSegment"] if c and c.get("exchangeSegment") else exchange_segment
-        tokens.append({"instrument_token": str(tok), "exchange_segment": seg})
+        # Kotak Neo quotes require the official instrument token. A trading
+        # symbol is not a valid substitute for instrument_token.
+        if not c or not c.get("token"):
+            logger.warning("Kotak quote skipped: no verified scrip-master token for symbol=%s", raw_s)
+            continue
+        tok = str(c["token"]).strip()
+        seg = c.get("exchangeSegment") or exchange_segment
+        tokens.append({"instrument_token": tok, "exchange_segment": seg})
     if not tokens:
+        logger.error("Kotak quotes not requested: no verified instrument tokens were found in the official scrip master")
         return []
 
     results = []
@@ -712,20 +718,46 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
     except Exception:
         pass
 
-    if not spot_ltp or spot_ltp <= 0:
-        default_spots = {"NIFTY": 22693.10, "BANKNIFTY": 54081.65, "SENSEX": 73370.68, "FINNIFTY": 24430.00}
-        spot_ltp = default_spots.get(sym, 22700.0)
-
     master = _ensure_kotak_scrip_master()
     active_expiries = master.get("expiries", {}).get(sym, [])
-    if active_expiries:
-        if not expiry or (expiry not in active_expiries and _clean_expiry(expiry) not in [_clean_expiry(e) for e in active_expiries]):
-            resolved_expiry = active_expiries[0]
-        else:
-            resolved_expiry = expiry
-    else:
-        resolved_expiry = _clean_expiry(expiry) or _get_nearest_expiry(sym)
 
+    # Never build a live option chain from guessed spot prices or synthetic expiries.
+    if not spot_ltp or spot_ltp <= 0:
+        logger.warning("Kotak option chain unavailable for %s: no valid live underlying quote", sym)
+        return {
+            "ok": False,
+            "error": "A valid live underlying quote is unavailable; no fallback spot price was used.",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "dataSource": "kotakneo_underlying_unavailable",
+            "selectedExpiry": None,
+            "expiries": active_expiries,
+            "spot": None,
+            "optionChain": [],
+            "data": [],
+        }
+
+    if not active_expiries:
+        logger.error("Kotak option chain unavailable for %s: official scrip master has no parsed expiries", sym)
+        return {
+            "ok": False,
+            "error": "Kotak official scrip master has no verified expiries for this index. Live option quotes were not requested.",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "dataSource": "kotakneo_scrip_master_unavailable",
+            "selectedExpiry": None,
+            "expiries": [],
+            "spot": {"ltp": spot_ltp, "change": 0.0, "change_pct": 0.0},
+            "optionChain": [],
+            "data": [],
+        }
+
+    normalized_requested = _clean_expiry(expiry) if expiry else ""
+    resolved_expiry = next(
+        (item for item in active_expiries
+         if item == expiry or _clean_expiry(item) == normalized_requested),
+        active_expiries[0],
+    )
     formatted_expiry_display = f"{resolved_expiry[:2]}-{resolved_expiry[2:5]}-{resolved_expiry[5:]}" if len(resolved_expiry) == 9 else resolved_expiry
 
     atm_strike = round(spot_ltp / step) * step
@@ -737,11 +769,30 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
     for st in strikes:
         ce_contract = master.get("scrips", {}).get((sym, resolved_expiry, float(st), "CE")) or master.get("scrips", {}).get((sym, _clean_expiry(resolved_expiry), float(st), "CE"))
         pe_contract = master.get("scrips", {}).get((sym, resolved_expiry, float(st), "PE")) or master.get("scrips", {}).get((sym, _clean_expiry(resolved_expiry), float(st), "PE"))
-        ce_sym = ce_contract["tradingSymbol"] if ce_contract else (_construct_nse_symbol(sym, resolved_expiry, st, "CE") or f"{sym}{resolved_expiry[:2]}{int(st)}CE")
-        pe_sym = pe_contract["tradingSymbol"] if pe_contract else (_construct_nse_symbol(sym, resolved_expiry, st, "PE") or f"{sym}{resolved_expiry[:2]}{int(st)}PE")
-        ce_sym_map[st] = ce_sym
-        pe_sym_map[st] = pe_sym
-        all_symbols.extend([ce_sym, pe_sym])
+        # Only request contracts that exist in the official scrip master.
+        ce_sym = ce_contract.get("tradingSymbol") if ce_contract else ""
+        pe_sym = pe_contract.get("tradingSymbol") if pe_contract else ""
+        ce_sym_map[st] = ce_sym or ""
+        pe_sym_map[st] = pe_sym or ""
+        if ce_contract and ce_contract.get("token") and ce_sym:
+            all_symbols.append(ce_sym)
+        if pe_contract and pe_contract.get("token") and pe_sym:
+            all_symbols.append(pe_sym)
+
+    if not all_symbols:
+        logger.error("Kotak option chain unavailable for %s expiry %s: no verified option contracts found in official scrip master", sym, resolved_expiry)
+        return {
+            "ok": False,
+            "error": "No verified option contracts were found in Kotak's official scrip master for the selected index and expiry.",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "dataSource": "kotakneo_scrip_master_unavailable",
+            "selectedExpiry": formatted_expiry_display,
+            "expiries": active_expiries,
+            "spot": {"ltp": spot_ltp, "change": 0.0, "change_pct": 0.0},
+            "optionChain": [],
+            "data": [],
+        }
 
     try:
         quotes_data = _fetch_kotak_quotes_bulk(all_symbols, exchange_segment=segment)
@@ -825,12 +876,12 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
         logger.warning(f"Kotak option chain for {sym} has zero live quotes (broker session may be offline)")
         return {
             "ok": False,
-            "error": "Live exchange quotes unavailable: broker session is offline or unauthenticated",
+            "error": "Kotak returned no usable live option quotes. Check the Kotak session, official scrip-master tokens, and quote API response.",
             "symbol": sym,
             "broker": "kotakneo",
             "dataSource": "kotakneo_offline",
             "selectedExpiry": formatted_expiry_display,
-            "expiries": _build_index_expiries(sym),
+            "expiries": active_expiries,
             "spot": {
                 "ltp": spot_ltp,
                 "change": 0.0,
@@ -850,7 +901,7 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
         "broker": "kotakneo",
         "dataSource": "kotakneo_live",
         "selectedExpiry": formatted_expiry_display,
-        "expiries": _build_index_expiries(sym),
+        "expiries": active_expiries,
         "spot": {
             "ltp": spot_ltp,
             "change": 0.0,
