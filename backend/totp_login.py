@@ -61,7 +61,7 @@ def generate_fyers_token_via_totp(fyers_id, fyers_pin, totp_key, client_id, secr
     # 1. Generate current 6-digit TOTP code
     totp = pyotp.TOTP(totp_key)
     current_otp = str(totp.now()).zfill(6)
-    print(f"[*] Generated TOTP OTP for {fyers_id}: {current_otp}")
+    print("[FYERS] TOTP generated; authentication continuing.")
 
     headers = {
         "Accept": "application/json",
