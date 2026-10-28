@@ -665,31 +665,58 @@ def _fetch_kotak_quotes_bulk(symbols: list[str], exchange_segment: str = "nse_fo
         if not raw_s:
             continue
         c = by_tsym.get(raw_s)
-        tok = c["token"] if c and c.get("token") else raw_s
-        seg = c["exchangeSegment"] if c and c.get("exchangeSegment") else exchange_segment
+        # Kotak quotes expects a real instrument token, never a guessed trading symbol.
+        if not c or not c.get("token"):
+            logger.warning("Skipping Kotak quote symbol without a verified scrip-master token: %s", raw_s[:80])
+            continue
+        tok = c["token"]
+        seg = c.get("exchangeSegment") or exchange_segment
         tokens.append({"instrument_token": str(tok), "exchange_segment": seg})
     if not tokens:
+        logger.warning("Kotak quotes request skipped: no verified instrument tokens were resolved")
         return []
 
     results = []
+    errors = []
     chunk_size = 40
     for i in range(0, len(tokens), chunk_size):
         chunk = tokens[i:i + chunk_size]
         try:
             with _KOTAK_LOCK:
                 resp = _KOTAK_CLIENT.quotes(instrument_tokens=chunk, quote_type="all")
+
             if isinstance(resp, list):
-                results.extend(resp)
+                results.extend(item for item in resp if isinstance(item, dict))
             elif isinstance(resp, dict):
+                # Keep broker errors visible in logs without logging credentials or session data.
+                broker_error = resp.get("error") or resp.get("message")
                 data = resp.get("data") or resp.get("success") or resp.get("quotes")
                 if isinstance(data, list):
-                    results.extend(data)
+                    results.extend(item for item in data if isinstance(item, dict))
                 elif isinstance(data, dict):
-                    results.append(data)
-                elif not resp.get("error"):
-                    results.append(resp)
+                    nested = data.get("data") or data.get("quotes") or data.get("success")
+                    if isinstance(nested, list):
+                        results.extend(item for item in nested if isinstance(item, dict))
+                    else:
+                        results.append(data)
+                elif broker_error:
+                    errors.append(str(broker_error)[:300])
+                    logger.warning("Kotak quotes API returned an error: %s", str(broker_error)[:300])
+                else:
+                    logger.info("Kotak quotes response had no recognized quote list; keys=%s", list(resp.keys())[:25])
+            else:
+                logger.warning("Kotak quotes returned unsupported response type: %s", type(resp).__name__)
         except Exception as exc:
-            logger.error(f"Kotak quotes chunk failed: {exc}")
+            message = str(exc)[:300]
+            errors.append(message)
+            logger.error("Kotak quotes chunk failed (%d instruments): %s", len(chunk), message)
+
+    if not results and errors:
+        raise RuntimeError("Kotak quotes request failed: " + "; ".join(errors[:3]))
+    if not results:
+        logger.warning("Kotak quotes API returned no quote rows for %d verified instruments", len(tokens))
+    else:
+        logger.info("Kotak quotes API returned %d rows for %d verified instruments", len(results), len(tokens))
     return results
 
 
@@ -713,20 +740,54 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
         pass
 
     if not spot_ltp or spot_ltp <= 0:
-        default_spots = {"NIFTY": 22693.10, "BANKNIFTY": 54081.65, "SENSEX": 73370.68, "FINNIFTY": 24430.00}
-        spot_ltp = default_spots.get(sym, 22700.0)
+        logger.warning("Kotak option chain skipped for %s: no verified live underlying spot is available", sym)
+        return {
+            "ok": False,
+            "error": "A verified live underlying spot is unavailable; refusing to use a hardcoded price.",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "dataSource": "kotakneo_unavailable",
+            "selectedExpiry": None,
+            "expiries": [],
+            "optionChain": [],
+            "data": [],
+        }
 
     master = _ensure_kotak_scrip_master()
     active_expiries = master.get("expiries", {}).get(sym, [])
-    if active_expiries:
-        if not expiry or (expiry not in active_expiries and _clean_expiry(expiry) not in [_clean_expiry(e) for e in active_expiries]):
-            resolved_expiry = active_expiries[0]
-        else:
-            resolved_expiry = expiry
-    else:
-        resolved_expiry = _clean_expiry(expiry) or _get_nearest_expiry(sym)
+    if not active_expiries:
+        logger.error(
+            "Kotak scrip master has no verified expiries for %s (master date=%s, contracts=%d)",
+            sym, master.get("date"), len(master.get("scrips", {}))
+        )
+        return {
+            "ok": False,
+            "error": "Kotak scrip master has no verified expiries for this index. Check scrip-master download and parsing.",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "dataSource": "kotakneo_scrip_master_unavailable",
+            "selectedExpiry": None,
+            "expiries": [],
+            "optionChain": [],
+            "data": [],
+        }
 
-    formatted_expiry_display = f"{resolved_expiry[:2]}-{resolved_expiry[2:5]}-{resolved_expiry[5:]}" if len(resolved_expiry) == 9 else resolved_expiry
+    requested_expiry = _clean_expiry(expiry) if expiry else ""
+    normalized_expiries = {_clean_expiry(e): e for e in active_expiries}
+    if requested_expiry and requested_expiry not in normalized_expiries:
+        return {
+            "ok": False,
+            "error": "Requested expiry is not present in the official Kotak scrip master.",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "dataSource": "kotakneo_invalid_expiry",
+            "selectedExpiry": None,
+            "expiries": active_expiries,
+            "optionChain": [],
+            "data": [],
+        }
+    resolved_expiry = normalized_expiries.get(requested_expiry, active_expiries[0])
+    formatted_expiry_display = resolved_expiry
 
     atm_strike = round(spot_ltp / step) * step
     strikes = [atm_strike + (i * step) for i in range(-strike_count, strike_count + 1)]
@@ -737,16 +798,30 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
     for st in strikes:
         ce_contract = master.get("scrips", {}).get((sym, resolved_expiry, float(st), "CE")) or master.get("scrips", {}).get((sym, _clean_expiry(resolved_expiry), float(st), "CE"))
         pe_contract = master.get("scrips", {}).get((sym, resolved_expiry, float(st), "PE")) or master.get("scrips", {}).get((sym, _clean_expiry(resolved_expiry), float(st), "PE"))
-        ce_sym = ce_contract["tradingSymbol"] if ce_contract else (_construct_nse_symbol(sym, resolved_expiry, st, "CE") or f"{sym}{resolved_expiry[:2]}{int(st)}CE")
-        pe_sym = pe_contract["tradingSymbol"] if pe_contract else (_construct_nse_symbol(sym, resolved_expiry, st, "PE") or f"{sym}{resolved_expiry[:2]}{int(st)}PE")
+        ce_sym = ce_contract.get("tradingSymbol", "") if ce_contract else ""
+        pe_sym = pe_contract.get("tradingSymbol", "") if pe_contract else ""
         ce_sym_map[st] = ce_sym
         pe_sym_map[st] = pe_sym
-        all_symbols.extend([ce_sym, pe_sym])
+        if ce_sym and ce_contract.get("token"):
+            all_symbols.append(ce_sym)
+        if pe_sym and pe_contract.get("token"):
+            all_symbols.append(pe_sym)
 
     try:
         quotes_data = _fetch_kotak_quotes_bulk(all_symbols, exchange_segment=segment)
     except Exception as e:
-        quotes_data = []
+        logger.error("Kotak option-chain quote fetch failed for %s expiry %s: %s", sym, resolved_expiry, str(e)[:300])
+        return {
+            "ok": False,
+            "error": "Kotak quote request failed. See backend logs for the sanitized broker error.",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "dataSource": "kotakneo_quote_error",
+            "selectedExpiry": formatted_expiry_display,
+            "expiries": active_expiries,
+            "optionChain": [],
+            "data": [],
+        }
     quotes_by_sym = {}
     by_token = master.get("by_token", {})
     for q in quotes_data:
@@ -830,7 +905,7 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
             "broker": "kotakneo",
             "dataSource": "kotakneo_offline",
             "selectedExpiry": formatted_expiry_display,
-            "expiries": _build_index_expiries(sym),
+            "expiries": active_expiries,
             "spot": {
                 "ltp": spot_ltp,
                 "change": 0.0,
@@ -850,7 +925,7 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
         "broker": "kotakneo",
         "dataSource": "kotakneo_live",
         "selectedExpiry": formatted_expiry_display,
-        "expiries": _build_index_expiries(sym),
+        "expiries": active_expiries,
         "spot": {
             "ltp": spot_ltp,
             "change": 0.0,
