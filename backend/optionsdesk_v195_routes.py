@@ -817,6 +817,29 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
             "pe_iv": round(base_iv * 100, 1),
         })
 
+    has_any_quote = any(
+        (r["ce_ltp"] > 0 or r["pe_ltp"] > 0 or r["ce_oi"] > 0 or r["pe_oi"] > 0)
+        for r in chain_rows
+    )
+    if not has_any_quote:
+        logger.warning(f"Kotak option chain for {sym} has zero live quotes (broker session may be offline)")
+        return {
+            "ok": False,
+            "error": "Live exchange quotes unavailable: broker session is offline or unauthenticated",
+            "symbol": sym,
+            "broker": "kotakneo",
+            "dataSource": "kotakneo_offline",
+            "selectedExpiry": formatted_expiry_display,
+            "expiries": _build_index_expiries(sym),
+            "spot": {
+                "ltp": spot_ltp,
+                "change": 0.0,
+                "change_pct": 0.0,
+            },
+            "optionChain": [],
+            "data": [],
+        }
+
     tot_call_oi = sum(r["ce_oi"] for r in chain_rows)
     tot_put_oi = sum(r["pe_oi"] for r in chain_rows)
     pcr = round(tot_put_oi / tot_call_oi, 2) if tot_call_oi > 0 else 1.0
