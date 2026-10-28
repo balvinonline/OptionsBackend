@@ -4348,7 +4348,7 @@ def normalize_future_against_spot(spot, future, max_abs_basis_pct=0.75, source_s
     return future
 
 
-def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date=None, expiry_catalog=None):
+def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date=None, expiry_catalog=None, include_history=True):
     dashboard_cache_key = f"{symbol_key}:{expiry_timestamp or expiry_date or 'front'}"
     cached = get_cached("dashboard", key=dashboard_cache_key, ttl=cache_ttl)
     if cached is not None:
@@ -4389,21 +4389,25 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
     spot["vwap"] = round2(clean_vwap_for_price(spot.get("vwap"), spot_ltp))
     if future_ltp is not None:
         future["vwap"] = round2(clean_vwap_for_price(future.get("vwap"), future_ltp))
-    history_snapshot = get_intraday_history_snapshot(symbol_key, spot_ltp or future_ltp)
-    history_open = safe_float(history_snapshot.get("todayOpen"), None)
-    if spot.get("open") in (None, 0) and history_open not in (None, 0):
-        spot["open"] = round2(history_open)
-        spot["open_source"] = "history_5m_first_candle"
-    history_vwap = history_snapshot.get("vwap")
-    if spot.get("vwap") is None and history_vwap is not None:
-        spot["vwap"] = round2(history_vwap)
-        spot["vwap_source"] = "history_5m"
+    if include_history:
+        history_snapshot = get_intraday_history_snapshot(symbol_key, spot_ltp or future_ltp)
+        history_open = safe_float(history_snapshot.get("todayOpen"), None)
+        if spot.get("open") in (None, 0) and history_open not in (None, 0):
+            spot["open"] = round2(history_open)
+            spot["open_source"] = "history_5m_first_candle"
+        history_vwap = history_snapshot.get("vwap")
+        if spot.get("vwap") is None and history_vwap is not None:
+            spot["vwap"] = round2(history_vwap)
+            spot["vwap_source"] = "history_5m"
 
-    previous_day_levels_raw = get_previous_day_levels(
-        cfg["spot"],
-        fallback_symbol=future_symbol,
-        cache_key=f"prev_day_detail:{symbol_key}"
-    ) or {}
+        previous_day_levels_raw = get_previous_day_levels(
+            cfg["spot"],
+            fallback_symbol=future_symbol,
+            cache_key=f"prev_day_detail:{symbol_key}"
+        ) or {}
+    else:
+        history_snapshot = {}
+        previous_day_levels_raw = get_cached("prev_day_detail", key=f"prev_day_detail:{symbol_key}", ttl=300) or {}
 
     if safe_float(previous_day_levels_raw.get("open"), None) is None:
         previous_day_levels_raw["open"] = (
@@ -9168,9 +9172,11 @@ def option_chain():
 
         dashboard_data = build_dashboard(
             symbol,
+            cache_ttl=3,
             expiry_timestamp=(selected or {}).get("timestamp"),
             expiry_date=(selected or {}).get("date"),
             expiry_catalog=catalog,
+            include_history=False,
         )
 
 
