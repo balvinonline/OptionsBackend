@@ -613,7 +613,22 @@ def get_request_fyers_client():
             log_path=""
         )
         configure_fyers_timeout(inst)
-        return inst
+        # Do not use a request-supplied token unless FYERS accepts it.
+        try:
+            profile = inst.get_profile() or {}
+            if profile.get("s") == "ok" or profile.get("code") == 200:
+                return inst
+        except Exception:
+            pass
+
+    # The server token was rejected. Attempt a single controlled TOTP renewal.
+    try:
+        if auto_refresh_fyers_token_if_needed():
+            refresh_fyers_from_env(force=True)
+            if fyers is not None and FYERS_ACCESS_TOKEN:
+                return fyers
+    except Exception as exc:
+        print(f"[FYERS] Automatic token recovery failed: {exc}")
 
     return fyers
 
@@ -3027,15 +3042,8 @@ def get_option_expiry_catalog(symbol_key, cache_ttl=_OPTION_EXPIRY_CACHE_TTL, fo
     option_symbols = cfg.get("option_symbols") or [cfg.get("spot"), cfg.get("future")]
     raw = get_option_chain_raw(option_symbols, cfg.get("future"), strikecount=1)
     catalog = extract_option_expiry_catalog(raw)
-    if not catalog:
-        try:
-            from optionsdesk_v195_routes import _ensure_kotak_scrip_master
-            master = _ensure_kotak_scrip_master()
-            kotak_exp = master.get("expiries", {}).get(key, [])
-            if kotak_exp:
-                catalog = [{"date": exp, "timestamp": None, "flag": None} for exp in kotak_exp]
-        except Exception:
-            pass
+    # This catalogue is used for FYERS market data only. Never mix in
+    # Kotak expiries or entries without a FYERS timestamp.
     if catalog:
         _OPTION_EXPIRY_CACHE[key] = {"ts": now, "data": catalog}
     return catalog
@@ -8530,13 +8538,26 @@ def fyers_history():
     lookback = max(90, min(lookback or 375, max_lookback))
     fyers_res = fetch_fyers_history(history_symbol, resolution=resolution, lookback_minutes=lookback)
     if not fyers_res or not fyers_res.get("ok") or not fyers_res.get("candles"):
-        yahoo_res = fetch_yahoo_history(symbol, resolution=resolution)
-        if yahoo_res and yahoo_res.get("candles"):
-            yahoo_res["fyers_attempts"] = (fyers_res or {}).get("attempts", [])
-            yahoo_res["fyers_response"] = (fyers_res or {}).get("response", {})
-            yahoo_res["fyers_error"] = (fyers_res or {}).get("error", "No candles")
-            return jsonify(yahoo_res)
-    return jsonify(fyers_res)
+        return jsonify({
+            "ok": False,
+            "source": "fyers",
+            "symbol": symbol,
+            "sourceSymbol": history_symbol,
+            "resolution": resolution,
+            "candles": [],
+            "error": (fyers_res or {}).get(
+                "error",
+                "FYERS historical candles unavailable",
+            ),
+            "attempts": (fyers_res or {}).get("attempts", []),
+        })
+
+    return jsonify({
+        **fyers_res,
+        "source": "fyers",
+        "sourceSymbol": history_symbol,
+        "resolution": resolution,
+    })
 
 
 @app.route("/api/fyers/quote")
@@ -9140,81 +9161,73 @@ def option_chain():
     requested_expiry = (request.args.get("expiry") or request.args.get("timestamp") or "").strip()
 
     try:
-        selected = None
-        catalog = None
-        broker_param = (request.args.get("broker") or "auto").strip().lower()
-        if broker_param == "kotakneo":
-            try:
-                from optionsdesk_v195_routes import get_kotak_option_chain_data
-                kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
-                if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
-                    return jsonify(kotak_chain)
-            except Exception as e:
-                print(f"Direct Kotak Neo option chain for {symbol} failed: {e}")
+        # FYERS is the market-data source. Kotak Neo is not a silent fallback.
+        broker_param = (request.args.get("broker") or "fyers").strip().lower()
+        if broker_param == "auto":
+            broker_param = "fyers"
 
-        if requested_expiry:
-            catalog = get_option_expiry_catalog(symbol)
-            selected = resolve_option_expiry(catalog, requested_expiry)
-            if selected is None and broker_param != "fyers":
-                try:
-                    from optionsdesk_v195_routes import get_kotak_option_chain_data
-                    kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
-                    if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
-                        return jsonify(kotak_chain)
-                except Exception as e:
-                    print(f"Kotak Neo requested expiry failover failed: {e}")
-
-            if selected is None:
-                if catalog and len(catalog) > 0:
-                    selected = catalog[0]
-                    print(f"[OptionChain] Requested expiry '{requested_expiry}' not in catalog for {symbol}; falling back to nearest broker expiry: {selected.get('date')}")
-                else:
-                    return jsonify({
-                        "error": "Requested expiry is not available",
-                        "symbol": symbol,
-                        "requestedExpiry": requested_expiry,
-                        "expiries": [item.get("date") for item in (catalog or []) if item.get("date")],
-                        "expiryDetails": catalog,
-                    }), 400
         if broker_param == "kotakneo":
-            try:
-                from optionsdesk_v195_routes import get_kotak_option_chain_data
-                kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
-                if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
-                    return jsonify(kotak_chain)
-            except Exception as e:
-                print(f"Direct Kotak Neo option chain for {symbol} failed: {e}")
+            from optionsdesk_v195_routes import get_kotak_option_chain_data
+            kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry or None)
+            status_code = 200 if kotak_chain and kotak_chain.get("ok") else 502
+            return jsonify(kotak_chain or {
+                "ok": False,
+                "error": "Kotak Neo option-chain data unavailable",
+                "symbol": symbol,
+                "optionChain": [],
+            }), status_code
+
+        if broker_param != "fyers":
+            return jsonify({
+                "ok": False,
+                "error": "Unsupported market-data broker",
+                "broker": broker_param,
+                "symbol": symbol,
+            }), 400
+
+        catalog = get_option_expiry_catalog(symbol, force=bool(requested_expiry))
+        selected = resolve_option_expiry(catalog, requested_expiry or None)
+
+        # Never silently substitute a different expiry.
+        if selected is None:
+            return jsonify({
+                "ok": False,
+                "error": (
+                    "Requested expiry is not available from FYERS"
+                    if requested_expiry
+                    else "No valid FYERS expiry is available"
+                ),
+                "broker": "fyers",
+                "symbol": symbol,
+                "requestedExpiry": requested_expiry or None,
+                "expiries": [
+                    item.get("date") for item in catalog if item.get("date")
+                ],
+                "expiryDetails": catalog,
+            }), 400
+
+        selected_timestamp = selected.get("timestamp")
+        if selected_timestamp in (None, "", 0, "0"):
+            return jsonify({
+                "ok": False,
+                "error": "Selected FYERS expiry has no valid timestamp",
+                "broker": "fyers",
+                "symbol": symbol,
+                "requestedExpiry": requested_expiry or None,
+                "selectedExpiry": selected.get("date"),
+                "expiries": [
+                    item.get("date") for item in catalog if item.get("date")
+                ],
+            }), 502
 
         dashboard_data = build_dashboard(
             symbol,
             cache_ttl=3,
-            expiry_timestamp=(selected or {}).get("timestamp"),
-            expiry_date=(selected or {}).get("date"),
+            expiry_timestamp=selected_timestamp,
+            expiry_date=selected.get("date"),
             expiry_catalog=catalog,
             include_history=False,
         )
-
-
-        chain_data = dashboard_data.get("optionChain") or dashboard_data.get("data") or []
-        if (not chain_data or len(chain_data) == 0) and broker_param != "fyers":
-            try:
-                from optionsdesk_v195_routes import get_kotak_option_chain_data
-                kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
-                if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
-                    has_real_oi = any((safe_float(r.get("ce_oi"), 0) > 0 or safe_float(r.get("pe_oi"), 0) > 0) for r in kotak_chain["optionChain"])
-                    if has_real_oi:
-                        dashboard_data["optionChain"] = kotak_chain["optionChain"]
-                        dashboard_data["data"] = kotak_chain["optionChain"]
-                        dashboard_data["broker"] = "kotakneo"
-                        dashboard_data["dataSource"] = "kotakneo_live"
-                    if not dashboard_data.get("selectedExpiry"):
-                        dashboard_data["selectedExpiry"] = kotak_chain.get("selectedExpiry")
-                    if not dashboard_data.get("expiries"):
-                        dashboard_data["expiries"] = kotak_chain.get("expiries")
-                    if not dashboard_data.get("spot") or not safe_float((dashboard_data.get("spot") or {}).get("ltp"), None):
-                        dashboard_data["spot"] = kotak_chain.get("spot") or dashboard_data.get("spot")
-            except Exception as e:
-                print(f"Kotak Neo failover for {symbol} failed: {e}")
 
         return jsonify({
             "broker": dashboard_data.get("broker") or "fyers",
