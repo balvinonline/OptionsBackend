@@ -1696,7 +1696,8 @@ def background_future_oi_updater():
                     chunk = future_symbols[i:i + 3]
                     for sym in chunk:
                         try:
-                            resp = fyers.depth({"symbol": sym, "ohlcv_flag": "1"})
+                            _client = get_request_fyers_client() or fyers
+                            resp = (_client or fyers).depth({"symbol": sym, "ohlcv_flag": "1"}) if (_client or fyers) else {}
                             if quote_response_rate_limited(resp):
                                 _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
                                 break
@@ -2628,6 +2629,7 @@ def get_quote_block(symbol):
 def get_quotes_map(symbols, chunk_size=10, fallback_missing=True):
     global _QUOTE_COOLDOWN_UNTIL
     refresh_fyers_from_env()
+    client = get_request_fyers_client() or fyers
     data = {}
     if not fyers or not symbols:
         return data
@@ -2657,7 +2659,7 @@ def get_quotes_map(symbols, chunk_size=10, fallback_missing=True):
         chunk = missing_symbols[i:i + chunk_size]
 
         try:
-            resp = fyers.quotes({"symbols": ",".join(chunk)})
+            resp = (client or fyers).quotes({"symbols": ",".join(chunk)})
             if quote_response_rate_limited(resp):
                 _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
                 break
@@ -3041,7 +3043,8 @@ def get_option_expiry_catalog(symbol_key, cache_ttl=_OPTION_EXPIRY_CACHE_TTL, fo
 
 def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12, expiry_timestamp=None):
     refresh_fyers_from_env()
-    if not fyers:
+    client = get_request_fyers_client() or fyers
+    if not client:
         return {}
 
     candidates = []
@@ -3078,7 +3081,7 @@ def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12
             if expiry_timestamp not in (None, "", 0, "0"):
                 payload["timestamp"] = str(expiry_timestamp)
 
-            resp = fyers.optionchain(payload)
+            resp = client.optionchain(payload)
 
             if DEBUG_LOGS:
                 print(f"optionchain payload for {sym}: {payload}")
@@ -8248,7 +8251,8 @@ def fyers_place_order():
     }
 
     try:
-        response = fyers.place_order(data=order_data)
+        _client = get_request_fyers_client() or fyers
+        response = (_client or fyers).place_order(data=order_data)
         if response.get("s") == "ok" or response.get("code") == 200:
             return jsonify({"ok": True, "message": "Order placed successfully", "data": response})
         else:
@@ -9069,6 +9073,7 @@ def stock_options_detail():
 
 @app.route("/api/dashboard")
 def dashboard():
+    get_request_fyers_client()
     symbol = (request.args.get("symbol") or request.args.get("index") or "NIFTY").strip().upper()
     if symbol not in INDEX_MAP:
         symbol = "NIFTY"
@@ -9127,6 +9132,7 @@ def option_expiries():
 
 @app.route("/api/option-chain")
 def option_chain():
+    get_request_fyers_client()
     symbol = (request.args.get("symbol") or request.args.get("index") or "NIFTY").strip().upper()
     if symbol not in INDEX_MAP:
         return jsonify({"error": "Unsupported symbol", "symbol": symbol}), 400
