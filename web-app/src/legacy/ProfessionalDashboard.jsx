@@ -451,7 +451,9 @@ function isFreshChartPayload(payload, resolution = "5") {
   }
 
   if (isAfterMarketClose()) {
-    return Date.now() - latest <= 36 * 60 * 60 * 1000;
+    // Keep the previous completed session visible outside trading hours,
+    // including weekends and market holidays.
+    return Date.now() - latest <= 5 * 24 * 60 * 60 * 1000;
   }
 
   const minutes = Number(key);
@@ -11062,7 +11064,7 @@ function ChartPopupContent({ detail = {}, symbol, pcrHistory = {}, optionSignalH
               {chartView === "tradingview" ? TRADINGVIEW_SYMBOLS[item] || "TradingView" : fyersChart?.sourceSymbol || "Fyers"}
             </Tag>
             <Tag color={liveFeed === "WS" ? "success" : "processing"}>{liveFeed === "WS" ? "WS" : "Quote 2s"}</Tag>
-            {chartView === "fyers" ? <Tag color="processing">Candles 45s</Tag> : null}
+            {chartView === "fyers" ? <Tag color="processing">Candles 10s</Tag> : null}
             {chartView === "fyers" ? <Checkbox className="signal-checkbox" checked={showSignals} onChange={(e) => setShowSignals(e.target.checked)}>Signals</Checkbox> : null}
             {chartView === "fyers" ? <Checkbox checked={showLongSignals} onChange={(e) => setShowLongSignals(e.target.checked)}>Long</Checkbox> : null}
             {chartView === "fyers" ? <Checkbox checked={showShortSignals} onChange={(e) => setShowShortSignals(e.target.checked)}>Short</Checkbox> : null}
