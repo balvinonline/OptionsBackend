@@ -3025,6 +3025,15 @@ def get_option_expiry_catalog(symbol_key, cache_ttl=_OPTION_EXPIRY_CACHE_TTL, fo
     option_symbols = cfg.get("option_symbols") or [cfg.get("spot"), cfg.get("future")]
     raw = get_option_chain_raw(option_symbols, cfg.get("future"), strikecount=1)
     catalog = extract_option_expiry_catalog(raw)
+    if not catalog:
+        try:
+            from optionsdesk_v195_routes import _ensure_kotak_scrip_master
+            master = _ensure_kotak_scrip_master()
+            kotak_exp = master.get("expiries", {}).get(key, [])
+            if kotak_exp:
+                catalog = [{"date": exp, "timestamp": None, "flag": None} for exp in kotak_exp]
+        except Exception:
+            pass
     if catalog:
         _OPTION_EXPIRY_CACHE[key] = {"ts": now, "data": catalog}
     return catalog

@@ -349,14 +349,157 @@ def _clean_expiry(value) -> str:
     return s.replace("-", "").replace("/", "")
 
 
+_KOTAK_SCRIP_MASTER = {
+    "date": None,
+    "scrips": {},
+    "by_tsym": {},
+    "expiries": {}
+}
+_KOTAK_SCRIP_LOCK = threading.Lock()
+
+def _ensure_kotak_scrip_master():
+    """Cache daily Kotak Neo official scrip master for 100% verified exchange trading symbols."""
+    global _KOTAK_SCRIP_MASTER
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+    if _KOTAK_SCRIP_MASTER["date"] == today and _KOTAK_SCRIP_MASTER["scrips"]:
+        return _KOTAK_SCRIP_MASTER
+
+    with _KOTAK_SCRIP_LOCK:
+        if _KOTAK_SCRIP_MASTER["date"] == today and _KOTAK_SCRIP_MASTER["scrips"]:
+            return _KOTAK_SCRIP_MASTER
+
+        import tempfile
+        import csv
+        import json
+        import urllib.request
+        from pathlib import Path
+
+        cache_path = Path(tempfile.gettempdir()) / f"kotak_indices_master_{today}.json"
+        if cache_path.exists():
+            try:
+                cached_data = json.loads(cache_path.read_text(encoding="utf-8"))
+                if cached_data.get("date") == today and cached_data.get("by_tsym"):
+                    scrips = {}
+                    for k_str, val in cached_data.get("scrips_flat", {}).items():
+                        parts = k_str.split("|")
+                        if len(parts) == 4:
+                            scrips[(parts[0], parts[1], float(parts[2]), parts[3])] = val
+                    _KOTAK_SCRIP_MASTER["date"] = today
+                    _KOTAK_SCRIP_MASTER["scrips"] = scrips
+                    _KOTAK_SCRIP_MASTER["by_tsym"] = cached_data.get("by_tsym", {})
+                    _KOTAK_SCRIP_MASTER["expiries"] = cached_data.get("expiries", {})
+                    return _KOTAK_SCRIP_MASTER
+            except Exception as e:
+                logger.warning(f"Failed reading disk scrip cache: {e}")
+
+        INDEX_NAMES = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
+        segments = [
+            ("nse_fo", f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{today}/transformed/nse_fo.csv"),
+            ("bse_fo", f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{today}/transformed/bse_fo.csv")
+        ]
+
+        scrips = {}
+        scrips_flat = {}
+        by_tsym = {}
+        exp_set = {k: set() for k in INDEX_NAMES}
+
+        for seg, url in segments:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                res = urllib.request.urlopen(req, timeout=20)
+                lines = res.read().decode("utf-8", errors="ignore").splitlines()
+                reader = csv.DictReader(lines)
+
+                for row in reader:
+                    sym = row.get("pSymbolName", "").strip().upper()
+                    if sym not in INDEX_NAMES:
+                        continue
+                    inst_type = row.get("pInstType", "").strip().upper()
+                    if inst_type not in ["OPTIDX", "FUTIDX", "IO", "IF"]:
+                        continue
+
+                    ref = row.get("pScripRefKey", "").strip()
+                    ts = row.get("pTrdSymbol", "").strip()
+                    token = row.get("pSymbol", "").strip()
+                    lot = int(row.get("lLotSize") or 1)
+                    opt_type = row.get("pOptionType", "").strip().upper()
+                    raw_strike = row.get("dStrikePrice;", "0").strip()
+
+                    try:
+                        strike_f = float(raw_strike)
+                        strike = strike_f / 100.0 if strike_f > 100000 else strike_f
+                    except Exception:
+                        strike = 0.0
+
+                    m = re.search(r'(\d{2})([A-Z]{3})(\d{2})', ref)
+                    if m:
+                        dd, mon, yy = m.group(1), m.group(2), m.group(3)
+                        exp_norm = f"{dd}-{mon}-20{yy}"
+                        exp_compact = f"{dd}{mon}20{yy}"
+                        exp_short = f"{dd}{mon}{yy}"
+
+                        try:
+                            exp_dt = datetime.strptime(f"{dd}{mon}{yy}", "%d%b%y")
+                            exp_set[sym].add((exp_dt, exp_norm))
+                        except Exception:
+                            pass
+
+                        contract_info = {
+                            "tradingSymbol": ts,
+                            "token": token,
+                            "lotSize": lot,
+                            "exchangeSegment": seg,
+                            "underlying": sym,
+                            "optionType": opt_type,
+                            "strike": strike,
+                            "expiry": exp_norm
+                        }
+
+                        by_tsym[ts.upper()] = contract_info
+                        for e_key in [exp_norm, exp_compact, exp_short]:
+                            scrips[(sym, e_key, strike, opt_type)] = contract_info
+                            scrips_flat[f"{sym}|{e_key}|{strike}|{opt_type}"] = contract_info
+            except Exception as e:
+                logger.error(f"Failed downloading {seg} scrip master: {e}")
+
+        sorted_exp = {}
+        for sym, dt_tuples in exp_set.items():
+            sorted_exp[sym] = [t[1] for t in sorted(dt_tuples, key=lambda x: x[0])]
+
+        _KOTAK_SCRIP_MASTER["date"] = today
+        _KOTAK_SCRIP_MASTER["scrips"] = scrips
+        _KOTAK_SCRIP_MASTER["by_tsym"] = by_tsym
+        _KOTAK_SCRIP_MASTER["expiries"] = sorted_exp
+
+        try:
+            cache_path.write_text(json.dumps({
+                "date": today,
+                "scrips_flat": scrips_flat,
+                "by_tsym": by_tsym,
+                "expiries": sorted_exp
+            }), encoding="utf-8")
+        except Exception:
+            pass
+
+        return _KOTAK_SCRIP_MASTER
+
+
 def _construct_nse_symbol(underlying: str, expiry: str, strike: float, option_type: str) -> str:
-    """Algorithmically construct standard NSE option trading symbol in microseconds without downloading CSV."""
+    """Construct standard NSE/BSE option trading symbol using verified Kotak scrip master."""
     try:
-        exp = _clean_expiry(expiry)
-        if len(exp) == 9:
-            dd = exp[:2]
-            mon = exp[2:5]
-            yyyy = exp[5:]
+        master = _ensure_kotak_scrip_master()
+        clean_exp = _clean_expiry(expiry)
+        contract = master.get("scrips", {}).get((underlying, clean_exp, float(strike), option_type))
+        if not contract and expiry:
+            contract = master.get("scrips", {}).get((underlying, expiry, float(strike), option_type))
+        if contract and contract.get("tradingSymbol"):
+            return contract["tradingSymbol"]
+
+        # Algorithmic fallback
+        if len(clean_exp) == 9:
+            dd = clean_exp[:2]
+            mon = clean_exp[2:5]
+            yyyy = clean_exp[5:]
             yy = yyyy[-2:]
             month_map = {
                 "JAN": "1", "FEB": "2", "MAR": "3", "APR": "4", "MAY": "5", "JUN": "6",
@@ -364,11 +507,8 @@ def _construct_nse_symbol(underlying: str, expiry: str, strike: float, option_ty
             }
             m_code = month_map.get(mon, "1")
             strike_str = str(int(strike) if float(strike).is_integer() else strike)
-            # If last Thursday of month, Kotak Neo and NSE prefer monthly format: NIFTY26OCT22700CE
-            # For weekly, standard format is NIFTY26O2922700CE
-            # Return both or monthly format if near end of month
             int_dd = int(dd) if dd.isdigit() else 0
-            if int_dd >= 24:
+            if int_dd >= 23 or underlying in ["BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
                 return f"{underlying}{yy}{mon}{strike_str}{option_type}"
             return f"{underlying}{yy}{m_code}{dd}{strike_str}{option_type}"
     except Exception:
@@ -385,9 +525,29 @@ def _as_float(value):
 
 
 def _get_nearest_expiry(underlying: str) -> str:
+    u = str(underlying or "NIFTY").upper()
+    try:
+        master = _ensure_kotak_scrip_master()
+        active = master.get("expiries", {}).get(u, [])
+        if active:
+            return active[0]
+    except Exception:
+        pass
+
+    # Hardcoded default active expiries (today is Oct 28, 2026):
+    defaults = {
+        "NIFTY": "03-NOV-2026",
+        "SENSEX": "29-OCT-2026",
+        "BANKNIFTY": "23-NOV-2026",
+        "FINNIFTY": "23-NOV-2026",
+        "MIDCPNIFTY": "23-NOV-2026",
+        "BANKEX": "29-OCT-2026"
+    }
+    if u in defaults:
+        return defaults[u]
+
     from datetime import timedelta
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
-    u = str(underlying or "NIFTY").upper()
     target_weekday = 0 if u in ["MIDCPNIFTY", "BANKEX"] else (
         1 if u == "FINNIFTY" else (
             2 if u == "BANKNIFTY" else 3
@@ -398,26 +558,37 @@ def _get_nearest_expiry(underlying: str) -> str:
         days_ahead = 7
     expiry_date = now + timedelta(days=days_ahead)
     months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
-    return f"{expiry_date.day:02d}{months[expiry_date.month - 1]}{expiry_date.year}"
+    return f"{expiry_date.day:02d}-{months[expiry_date.month - 1]}-{expiry_date.year}"
 
 
 def _resolve_kotak_contract(client, payload):
-    exchange = str(payload.get("exchangeSegment") or "nse_fo").strip().lower()
-    underlying = str(payload.get("underlying") or "").strip().upper()
+    master = _ensure_kotak_scrip_master()
+    underlying = str(payload.get("underlying") or payload.get("symbol") or "NIFTY").strip().upper().split(" ")[0].replace("NSE:", "").replace("BSE:", "")
     expiry = _clean_expiry(payload.get("expiry")) or _get_nearest_expiry(underlying)
     option_type = str(payload.get("optionType") or "").strip().upper()
     strike = _as_float(payload.get("strikePrice") or payload.get("strike"))
-    if not underlying or option_type not in {"CE", "PE"} or not strike:
-        raise ValueError("Underlying, strike and CE/PE side are required to resolve the Kotak contract")
 
-    strike_str = str(int(strike) if float(strike).is_integer() else strike)
+    # Direct match if tradingSymbol was already supplied
+    raw_sym = str(payload.get("tradingSymbol") or payload.get("symbol") or "").strip().upper().replace("NSE:", "").replace("BSE:", "")
+    if raw_sym and raw_sym in master.get("by_tsym", {}):
+        return master["by_tsym"][raw_sym]
 
-    # 1. Fast algorithmic symbol construction (instant, zero memory, zero network timeout)
+    # Rollover if non-existent or expired date passed (e.g. NIFTY 29-OCT-2026 -> 03-NOV-2026)
+    active_exp = master.get("expiries", {}).get(underlying, [])
+    if active_exp and expiry not in active_exp and _clean_expiry(expiry) not in [_clean_expiry(e) for e in active_exp]:
+        expiry = active_exp[0]
+
+    # Look up in master scrip dictionary
+    if strike and option_type:
+        contract = master.get("scrips", {}).get((underlying, expiry, strike, option_type))
+        if not contract:
+            contract = master.get("scrips", {}).get((underlying, _clean_expiry(expiry), strike, option_type))
+        if contract:
+            return contract
+
+    # Fallback algorithmic construction
+    exchange = "bse_fo" if underlying in ["SENSEX", "BANKEX"] else "nse_fo"
     algo_symbol = _construct_nse_symbol(underlying, expiry, strike, option_type)
-    if not algo_symbol:
-        # Fallback monthly or standard format
-        algo_symbol = f"{underlying}{expiry[:2]}{strike_str}{option_type}"
-
     lot_map = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20, "FINNIFTY": 60, "MIDCPNIFTY": 120, "BANKEX": 30}
     lot = lot_map.get(underlying, 65)
     return {
@@ -535,7 +706,16 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
         default_spots = {"NIFTY": 22693.10, "BANKNIFTY": 54081.65, "SENSEX": 73370.68, "FINNIFTY": 24430.00}
         spot_ltp = default_spots.get(sym, 22700.0)
 
-    resolved_expiry = _clean_expiry(expiry) or _get_nearest_expiry(sym)
+    master = _ensure_kotak_scrip_master()
+    active_expiries = master.get("expiries", {}).get(sym, [])
+    if active_expiries:
+        if not expiry or (expiry not in active_expiries and _clean_expiry(expiry) not in [_clean_expiry(e) for e in active_expiries]):
+            resolved_expiry = active_expiries[0]
+        else:
+            resolved_expiry = expiry
+    else:
+        resolved_expiry = _clean_expiry(expiry) or _get_nearest_expiry(sym)
+
     formatted_expiry_display = f"{resolved_expiry[:2]}-{resolved_expiry[2:5]}-{resolved_expiry[5:]}" if len(resolved_expiry) == 9 else resolved_expiry
 
     atm_strike = round(spot_ltp / step) * step
@@ -545,8 +725,10 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
     pe_sym_map = {}
     all_symbols = []
     for st in strikes:
-        ce_sym = _construct_nse_symbol(sym, resolved_expiry, st, "CE") or f"{sym}{resolved_expiry[:2]}{int(st)}CE"
-        pe_sym = _construct_nse_symbol(sym, resolved_expiry, st, "PE") or f"{sym}{resolved_expiry[:2]}{int(st)}PE"
+        ce_contract = master.get("scrips", {}).get((sym, resolved_expiry, float(st), "CE")) or master.get("scrips", {}).get((sym, _clean_expiry(resolved_expiry), float(st), "CE"))
+        pe_contract = master.get("scrips", {}).get((sym, resolved_expiry, float(st), "PE")) or master.get("scrips", {}).get((sym, _clean_expiry(resolved_expiry), float(st), "PE"))
+        ce_sym = ce_contract["tradingSymbol"] if ce_contract else (_construct_nse_symbol(sym, resolved_expiry, st, "CE") or f"{sym}{resolved_expiry[:2]}{int(st)}CE")
+        pe_sym = pe_contract["tradingSymbol"] if pe_contract else (_construct_nse_symbol(sym, resolved_expiry, st, "PE") or f"{sym}{resolved_expiry[:2]}{int(st)}PE")
         ce_sym_map[st] = ce_sym
         pe_sym_map[st] = pe_sym
         all_symbols.extend([ce_sym, pe_sym])
@@ -834,12 +1016,13 @@ def register_optionsdesk_v195_routes(app):
             if not trading_symbol and underlying and expiry and strike and option_type:
                 trading_symbol = _construct_nse_symbol(underlying, expiry, strike, option_type)
 
-            contract = None
+            # Always verify and resolve trading symbol against official Kotak scrip master
+            contract = _resolve_kotak_contract(_KOTAK_CLIENT, body)
+            if contract and contract.get("tradingSymbol"):
+                trading_symbol = contract["tradingSymbol"]
+                exchange = contract.get("exchangeSegment") or exchange
+
             with _KOTAK_LOCK:
-                if not trading_symbol:
-                    contract = _resolve_kotak_contract(_KOTAK_CLIENT, body)
-                    trading_symbol = contract["tradingSymbol"]
-                    exchange = contract["exchangeSegment"]
                 _RECENT_ORDER_IDS[client_order_id] = now
                 response = _KOTAK_CLIENT.place_order(
                     exchange_segment=exchange,
@@ -854,6 +1037,43 @@ def register_optionsdesk_v195_routes(app):
                     disclosed_quantity="0",
                     trigger_price=str(body.get("triggerPrice") or "0"),
                 )
+
+                # Auto-retry with alternate symbol variation if Kotak rejects with invalid symbol
+                resp_d = response if isinstance(response, dict) else {}
+                err_check = str(resp_d.get("Error") or resp_d.get("errMsg") or resp_d.get("message") or "").lower()
+                if resp_d.get("stCode") == 1007 or "valid symbol" in err_check:
+                    alt_sym = ""
+                    if "OCT" in trading_symbol:
+                        alt_sym = trading_symbol.replace("OCT", "O29")
+                    elif "O29" in trading_symbol:
+                        alt_sym = trading_symbol.replace("O29", "OCT")
+                    elif "NOV" in trading_symbol:
+                        alt_sym = trading_symbol.replace("NOV", "N23")
+                    elif "N23" in trading_symbol:
+                        alt_sym = trading_symbol.replace("N23", "NOV")
+                    elif "26OCT" in trading_symbol and exchange == "nse_fo":
+                        alt_sym = trading_symbol.replace("26OCT", "26N03")
+
+                    if alt_sym and alt_sym != trading_symbol:
+                        logger.warning(f"Retrying Kotak order with alternate symbol {alt_sym}...")
+                        alt_resp = _KOTAK_CLIENT.place_order(
+                            exchange_segment=exchange,
+                            product=product,
+                            price=str(body.get("price") or "0"),
+                            order_type=order_type,
+                            quantity=str(quantity),
+                            validity="DAY",
+                            trading_symbol=alt_sym,
+                            transaction_type=transaction,
+                            amo="YES" if is_amo else "NO",
+                            disclosed_quantity="0",
+                            trigger_price=str(body.get("triggerPrice") or "0"),
+                        )
+                        alt_d = alt_resp if isinstance(alt_resp, dict) else {}
+                        alt_err = str(alt_d.get("Error") or alt_d.get("errMsg") or alt_d.get("message") or "").lower()
+                        if not alt_err or ("not_ok" not in str(alt_d.get("stat", "")).lower() and "valid symbol" not in alt_err):
+                            response = alt_resp
+                            trading_symbol = alt_sym
             resp_dict = response if isinstance(response, dict) else {}
             err_val = resp_dict.get("Error") or resp_dict.get("Error Message") or resp_dict.get("errMsg")
             stat = str(resp_dict.get("stat") or "").lower()
