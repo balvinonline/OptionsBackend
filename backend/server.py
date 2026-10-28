@@ -507,20 +507,21 @@ def normalize_fyers_access_token(client_id, access_token):
 
 def get_request_fyers_client():
     """
-    Returns an active FyersModel instance.
-    Checks:
-    1. Header 'x-fyers-token' or 'X-Fyers-Token' from incoming HTTP request.
-    2. Header 'Authorization: Bearer <token>'
-    3. Query parameter 'fyers_token'
-    4. Falls back to global server env token.
-    This guarantees that client-side tokens are NEVER wiped by Render restarts!
+    Returns an active FyersModel instance with intelligent bidirectional token resolution:
+    - If server environment token is active, uses it.
+    - If client provides a token in request header and server token is expired/invalid,
+      validates client token and automatically adopts it across the server.
+    - If client passes stale token, gracefully falls back to valid server token.
     """
-    global FYERS_CLIENT_ID, fyersModel, fyers
+    global FYERS_CLIENT_ID, fyersModel, fyers, FYERS_ACCESS_TOKEN, _FYERS_VALIDATION_CACHE
     if not fyersModel:
         return None
     client_id = (os.getenv("FYERS_CLIENT_ID", "") or FYERS_CLIENT_ID).strip()
     if not client_id:
         return None
+
+    refresh_fyers_from_env()
+    server_token = (os.getenv("FYERS_ACCESS_TOKEN", "") or FYERS_ACCESS_TOKEN).strip()
 
     req_token = None
     try:
@@ -538,32 +539,83 @@ def get_request_fyers_client():
     except Exception:
         pass
 
-    refresh_fyers_from_env()
-    server_token = (os.getenv("FYERS_ACCESS_TOKEN", "") or FYERS_ACCESS_TOKEN).strip()
+    clean_req_token = normalize_fyers_access_token(client_id, req_token) if req_token else None
 
-    if req_token:
-        clean_token = normalize_fyers_access_token(client_id, req_token)
-        if clean_token:
-            # If client token matches active server token, use global fyers directly
-            if server_token and clean_token == server_token and fyers is not None:
-                return fyers
-            # If server already has a verified, active token, prefer server token over unverified client header
-            if fyers is not None and server_token:
-                # Test server token first
-                return fyers
-            # Otherwise construct client with provided token
-            inst = fyersModel.FyersModel(
+    # Check server client validity
+    server_valid = False
+    if fyers is not None and server_token:
+        now = time.time()
+        token_fingerprint = str(server_token)[-20:]
+        if (
+            _FYERS_VALIDATION_CACHE.get("valid")
+            and (now - _FYERS_VALIDATION_CACHE.get("cached_at", 0) < 60.0)
+            and _FYERS_VALIDATION_CACHE.get("token_fingerprint") == token_fingerprint
+        ):
+            server_valid = True
+        else:
+            try:
+                p = fyers.get_profile() or {}
+                if p.get("s") == "ok" or p.get("code") == 200:
+                    server_valid = True
+                    _FYERS_VALIDATION_CACHE = {
+                        "valid": True,
+                        "error": "",
+                        "cached_at": now,
+                        "token_fingerprint": token_fingerprint,
+                    }
+                else:
+                    _FYERS_VALIDATION_CACHE = {
+                        "valid": False,
+                        "error": p.get("message") or "Expired",
+                        "cached_at": now,
+                        "token_fingerprint": token_fingerprint,
+                    }
+            except Exception:
+                server_valid = False
+
+    # If server client is healthy and client passed no token (or same token), use server client
+    if server_valid and (not clean_req_token or clean_req_token == server_token):
+        return fyers
+
+    # If client passed a different token, test it
+    if clean_req_token and clean_req_token != server_token:
+        try:
+            client_inst = fyersModel.FyersModel(
                 client_id=client_id,
                 is_async=False,
-                token=clean_token,
+                token=clean_req_token,
                 log_path=""
             )
-            configure_fyers_timeout(inst)
-            return inst
+            configure_fyers_timeout(client_inst)
+            cp = client_inst.get_profile() or {}
+            if cp.get("s") == "ok" or cp.get("code") == 200:
+                # Client token is valid! Adopt it on the server
+                mark_fyers_token_ready(client_id, clean_req_token)
+                _FYERS_VALIDATION_CACHE = {
+                    "valid": True,
+                    "error": "",
+                    "cached_at": time.time(),
+                    "token_fingerprint": str(clean_req_token)[-20:],
+                }
+                return client_inst
+        except Exception:
+            pass
+
+    # If server client is valid, fall back to it
+    if server_valid:
+        return fyers
+
+    if clean_req_token:
+        inst = fyersModel.FyersModel(
+            client_id=client_id,
+            is_async=False,
+            token=clean_req_token,
+            log_path=""
+        )
+        configure_fyers_timeout(inst)
+        return inst
 
     return fyers
-
-
 
 def looks_like_raw_fyers_auth_code(value):
     token = str(value or "").strip().strip('"').strip("'")
