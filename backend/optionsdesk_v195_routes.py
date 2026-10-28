@@ -455,9 +455,7 @@ def _build_index_expiries(underlying: str, count: int = 4) -> list[str]:
     u = str(underlying or "NIFTY").upper()
     target_weekday = 0 if u in ["MIDCPNIFTY", "BANKEX"] else (
         1 if u == "FINNIFTY" else (
-            2 if u == "BANKNIFTY" else (
-                4 if u == "SENSEX" else 3
-            )
+            2 if u == "BANKNIFTY" else 3
         )
     )
     days_ahead = (target_weekday - now.weekday()) % 7
