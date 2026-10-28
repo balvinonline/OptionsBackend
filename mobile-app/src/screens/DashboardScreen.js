@@ -18,6 +18,7 @@ import { MarketGateCard } from '../components/MarketGateCard';
 import { AdvancedAnalyticsCard } from '../components/AdvancedAnalyticsCard';
 import { OiBarChart } from '../components/OiBarChart';
 import { ServerSettingsModal } from '../components/ServerSettingsModal';
+import { GlobalMarketVisualizer } from '../components/GlobalMarketVisualizer';
 import { useTheme } from '../context/ThemeContext';
 
 export const DashboardScreen = ({ onNavigate }) => {
@@ -99,7 +100,7 @@ export const DashboardScreen = ({ onNavigate }) => {
       {/* Smart Top Segmented Tabs (Kotak Style) */}
       <View style={styles.segmentedTabsContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {['Market Stats', 'F&O', 'Stocks', 'Sector Performance'].map((tab) => (
+          {['Market Stats', 'Global', 'F&O', 'Stocks', 'Sector Performance'].map((tab) => (
             <TouchableOpacity 
               key={tab}
               style={[styles.segmentedTab, activeDashTab === tab && styles.segmentedTabActive]}
@@ -135,6 +136,11 @@ export const DashboardScreen = ({ onNavigate }) => {
             <IndexHeader onOpenSettings={() => setShowSettings(true)} onNavigate={onNavigate} />
             <VitalSignsHUD marketData={marketData} />
           </View>
+        )}
+
+        {/* --- TAB: GLOBAL --- */}
+        {activeDashTab === 'Global' && (
+          <GlobalMarketVisualizer />
         )}
 
         {/* --- TAB: STOCKS --- */}

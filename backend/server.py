@@ -2764,7 +2764,7 @@ def normalize_expiry_date(value):
         except Exception:
             return None
 
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d-%b-%Y", "%d%b%Y", "%d-%b-%y", "%d%b%y"):
         try:
             return datetime.strptime(text, fmt).date().isoformat()
         except Exception:

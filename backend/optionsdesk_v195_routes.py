@@ -389,9 +389,7 @@ def _get_nearest_expiry(underlying: str) -> str:
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     u = str(underlying or "NIFTY").upper()
     target_weekday = 1 if u == "FINNIFTY" else (
-        2 if u == "BANKNIFTY" else (
-            4 if u == "SENSEX" else 3
-        )
+        2 if u == "BANKNIFTY" else 3
     )
     days_ahead = (target_weekday - now.weekday()) % 7
     if days_ahead == 0 and (now.hour > 15 or (now.hour == 15 and now.minute >= 30)):
