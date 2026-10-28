@@ -945,3 +945,33 @@ def register_optionsdesk_v195_routes(app):
             logger.error(f"Kotak Neo option chain endpoint error: {exc}")
             return jsonify({"ok": False, "error": str(exc), "symbol": symbol}), 502
 
+    @app.route("/api/kotakneo/scrip-files", methods=["GET"])
+    def kotakneo_scrip_files():
+        global _KOTAK_CLIENT
+        try:
+            client = _KOTAK_CLIENT or _new_kotak_client()
+            res = client.scrip_master()
+            return jsonify({"ok": True, "data": res})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+
+    @app.route("/api/kotakneo/search-scrip", methods=["GET"])
+    def kotakneo_search_scrip():
+        global _KOTAK_CLIENT
+        sym = request.args.get("symbol", "NIFTY").strip()
+        seg = request.args.get("segment", "nse_fo").strip()
+        strike = request.args.get("strike", "21950").strip()
+        opt = request.args.get("option_type", "PE").strip()
+        try:
+            client = _KOTAK_CLIENT or _new_kotak_client()
+            res = client.search_scrip(
+                exchange_segment=seg,
+                symbol=sym,
+                strike_price=strike,
+                option_type=opt,
+            )
+            return jsonify({"ok": True, "data": res})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+
+
