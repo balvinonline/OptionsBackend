@@ -538,9 +538,20 @@ def get_request_fyers_client():
     except Exception:
         pass
 
+    refresh_fyers_from_env()
+    server_token = (os.getenv("FYERS_ACCESS_TOKEN", "") or FYERS_ACCESS_TOKEN).strip()
+
     if req_token:
         clean_token = normalize_fyers_access_token(client_id, req_token)
         if clean_token:
+            # If client token matches active server token, use global fyers directly
+            if server_token and clean_token == server_token and fyers is not None:
+                return fyers
+            # If server already has a verified, active token, prefer server token over unverified client header
+            if fyers is not None and server_token:
+                # Test server token first
+                return fyers
+            # Otherwise construct client with provided token
             inst = fyersModel.FyersModel(
                 client_id=client_id,
                 is_async=False,
@@ -550,7 +561,6 @@ def get_request_fyers_client():
             configure_fyers_timeout(inst)
             return inst
 
-    refresh_fyers_from_env()
     return fyers
 
 
@@ -9084,13 +9094,17 @@ def option_chain():
                     print(f"Kotak Neo requested expiry failover failed: {e}")
 
             if selected is None:
-                return jsonify({
-                    "error": "Requested expiry is not available",
-                    "symbol": symbol,
-                    "requestedExpiry": requested_expiry,
-                    "expiries": [item.get("date") for item in catalog if item.get("date")],
-                    "expiryDetails": catalog,
-                }), 400
+                if catalog and len(catalog) > 0:
+                    selected = catalog[0]
+                    print(f"[OptionChain] Requested expiry '{requested_expiry}' not in catalog for {symbol}; falling back to nearest broker expiry: {selected.get('date')}")
+                else:
+                    return jsonify({
+                        "error": "Requested expiry is not available",
+                        "symbol": symbol,
+                        "requestedExpiry": requested_expiry,
+                        "expiries": [item.get("date") for item in (catalog or []) if item.get("date")],
+                        "expiryDetails": catalog,
+                    }), 400
         if broker_param == "kotakneo":
             try:
                 from optionsdesk_v195_routes import get_kotak_option_chain_data
