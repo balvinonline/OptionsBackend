@@ -657,7 +657,17 @@ def _fetch_kotak_quotes_bulk(symbols: list[str], exchange_segment: str = "nse_fo
     if _KOTAK_CLIENT is None:
         raise RuntimeError("Kotak Neo trading session is not connected")
     
-    tokens = [{"instrument_token": str(s).strip(), "exchange_segment": exchange_segment} for s in symbols if str(s).strip()]
+    master = _ensure_kotak_scrip_master()
+    by_tsym = master.get("by_tsym", {})
+    tokens = []
+    for s in symbols:
+        raw_s = str(s).strip().upper()
+        if not raw_s:
+            continue
+        c = by_tsym.get(raw_s)
+        tok = c["token"] if c and c.get("token") else raw_s
+        seg = c["exchangeSegment"] if c and c.get("exchangeSegment") else exchange_segment
+        tokens.append({"instrument_token": str(tok), "exchange_segment": seg})
     if not tokens:
         return []
 
@@ -738,11 +748,17 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
     except Exception as e:
         quotes_data = []
     quotes_by_sym = {}
+    by_token = master.get("by_token", {})
     for q in quotes_data:
         if isinstance(q, dict):
-            key = str(q.get("tsym") or q.get("symbol") or q.get("instrument_token") or "").strip().upper()
+            key = str(q.get("tsym") or q.get("symbol") or "").strip().upper()
             if key:
                 quotes_by_sym[key] = q
+            tok_key = str(q.get("instrument_token") or q.get("token") or "").strip()
+            if tok_key and tok_key in by_token:
+                c = by_token[tok_key]
+                if c.get("tradingSymbol"):
+                    quotes_by_sym[c["tradingSymbol"].upper()] = q
 
     # Calculate DTE and time value for this specific expiry
     try:
