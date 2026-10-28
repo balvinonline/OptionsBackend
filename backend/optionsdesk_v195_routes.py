@@ -388,8 +388,10 @@ def _get_nearest_expiry(underlying: str) -> str:
     from datetime import timedelta
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     u = str(underlying or "NIFTY").upper()
-    target_weekday = 1 if u == "FINNIFTY" else (
-        2 if u == "BANKNIFTY" else 3
+    target_weekday = 0 if u in ["MIDCPNIFTY", "BANKEX"] else (
+        1 if u == "FINNIFTY" else (
+            2 if u == "BANKNIFTY" else 3
+        )
     )
     days_ahead = (target_weekday - now.weekday()) % 7
     if days_ahead == 0 and (now.hour > 15 or (now.hour == 15 and now.minute >= 30)):
@@ -416,7 +418,7 @@ def _resolve_kotak_contract(client, payload):
         # Fallback monthly or standard format
         algo_symbol = f"{underlying}{expiry[:2]}{strike_str}{option_type}"
 
-    lot_map = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20, "FINNIFTY": 60, "MIDCPNIFTY": 120}
+    lot_map = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20, "FINNIFTY": 60, "MIDCPNIFTY": 120, "BANKEX": 30}
     lot = lot_map.get(underlying, 65)
     return {
         "tradingSymbol": algo_symbol,
@@ -512,7 +514,7 @@ def _fetch_kotak_quotes_bulk(symbols: list[str], exchange_segment: str = "nse_fo
 
 def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None, strike_count: int = 15) -> dict:
     sym = str(symbol or "NIFTY").strip().upper()
-    step_map = {"NIFTY": 50, "BANKNIFTY": 100, "SENSEX": 100, "FINNIFTY": 50, "MIDCPNIFTY": 25}
+    step_map = {"NIFTY": 50, "BANKNIFTY": 100, "SENSEX": 100, "FINNIFTY": 50, "MIDCPNIFTY": 25, "BANKEX": 100}
     step = step_map.get(sym, 50)
     is_bse = sym in {"SENSEX", "BANKEX"}
     segment = "bse_fo" if is_bse else "nse_fo"
@@ -579,27 +581,12 @@ def get_kotak_option_chain_data(symbol: str = "NIFTY", expiry: str | None = None
         pe_q = quotes_by_sym.get(pe_s.upper(), {})
 
         ce_ltp = _as_float(ce_q.get("lval") or ce_q.get("ltp") or ce_q.get("lp") or ce_q.get("close") or 0) or 0.0
-        if ce_ltp <= 0:
-            try:
-                from server import black_scholes_price
-                bs_val = black_scholes_price("CE", spot_ltp, st, T, 0.0675, base_iv)
-                ce_ltp = round(float(bs_val), 2) if bs_val and bs_val > 0 else round(max(0.05, spot_ltp - st + 0.05), 2)
-            except Exception:
-                ce_ltp = round(max(0.05, spot_ltp - st + 0.05), 2)
-
         ce_oi = int(_as_float(ce_q.get("oi") or ce_q.get("open_interest") or 0) or 0)
         ce_vol = int(_as_float(ce_q.get("vol") or ce_q.get("volume") or 0) or 0)
         ce_chg = _as_float(ce_q.get("change") or ce_q.get("chg") or 0) or 0.0
         ce_chg_pct = _as_float(ce_q.get("per_change") or ce_q.get("change_pct") or 0) or 0.0
 
         pe_ltp = _as_float(pe_q.get("lval") or pe_q.get("ltp") or pe_q.get("lp") or pe_q.get("close") or 0) or 0.0
-        if pe_ltp <= 0:
-            try:
-                from server import black_scholes_price
-                bs_val = black_scholes_price("PE", spot_ltp, st, T, 0.0675, base_iv)
-                pe_ltp = round(float(bs_val), 2) if bs_val and bs_val > 0 else round(max(0.05, st - spot_ltp + 0.05), 2)
-            except Exception:
-                pe_ltp = round(max(0.05, st - spot_ltp + 0.05), 2)
         pe_oi = int(_as_float(pe_q.get("oi") or pe_q.get("open_interest") or 0) or 0)
         pe_vol = int(_as_float(pe_q.get("vol") or pe_q.get("volume") or 0) or 0)
         pe_chg = _as_float(pe_q.get("change") or pe_q.get("chg") or 0) or 0.0

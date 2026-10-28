@@ -628,6 +628,56 @@ _FYERS_VALIDATION_CACHE = {
     "token_fingerprint": "",
 }
 
+_LAST_AUTO_LOGIN_ATTEMPT = 0.0
+_AUTO_LOGIN_LOCK = threading.Lock()
+
+def auto_refresh_fyers_token_if_needed():
+    """
+    Automatically renews the Fyers access token via TOTP credentials
+    whenever tokenValid is False. Prevents user from having to manually
+    refresh the token in Render and redeploy.
+    """
+    global _LAST_AUTO_LOGIN_ATTEMPT, _QUOTE_COOLDOWN_UNTIL
+    client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
+    secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
+    fyers_id = os.getenv("FYERS_ID", "").strip()
+    fyers_pin = os.getenv("FYERS_PIN", "").strip()
+    totp_key = os.getenv("FYERS_TOTP_KEY", "").strip()
+    if not (client_id and secret_key and fyers_id and fyers_pin and totp_key):
+        return False
+
+    now = time.time()
+    # At least 180 seconds between auto-login attempts to avoid Fyers rate limiting
+    if now - _LAST_AUTO_LOGIN_ATTEMPT < 180:
+        return False
+
+    with _AUTO_LOGIN_LOCK:
+        if now - _LAST_AUTO_LOGIN_ATTEMPT < 180:
+            return False
+        _LAST_AUTO_LOGIN_ATTEMPT = now
+        try:
+            print(f"[*] [Auto-Refresh] Fyers session token expired. Attempting automated TOTP renewal for {fyers_id}...")
+            from totp_login import generate_fyers_token_via_totp
+            new_token = generate_fyers_token_via_totp(
+                fyers_id=fyers_id,
+                fyers_pin=fyers_pin,
+                totp_key=totp_key,
+                client_id=client_id,
+                secret_key=secret_key,
+                redirect_uri=get_fyers_redirect_uri()
+            )
+            if new_token:
+                save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", new_token)
+                _QUOTE_COOLDOWN_UNTIL = 0.0
+                refresh_fyers_from_env(force=True)
+                clear_live_market_caches()
+                print("[+] [Auto-Refresh] Successfully generated fresh Fyers token via TOTP!")
+                return True
+        except Exception as exc:
+            print(f"[-] [Auto-Refresh] Fyers TOTP renewal failed: {exc}")
+            return False
+    return False
+
 
 def validate_fyers_session_token(force_check=False):
     """Validate the token with FYERS instead of treating SDK construction as authentication."""
@@ -661,6 +711,20 @@ def validate_fyers_session_token(force_check=False):
                     "token_fingerprint": token_fingerprint,
                 }
                 return True, ""
+            if auto_refresh_fyers_token_if_needed():
+                recheck_client = get_request_fyers_client()
+                if recheck_client:
+                    re_resp = (recheck_client or fyers).get_profile() or {}
+                    if isinstance(re_resp, dict) and (str(re_resp.get("s") or "").strip().lower() == "ok" or re_resp.get("code") == 200):
+                        new_fp = str(FYERS_ACCESS_TOKEN or "")[-20:]
+                        _FYERS_VALIDATION_CACHE = {
+                            "valid": True,
+                            "error": "",
+                            "cached_at": time.time(),
+                            "token_fingerprint": new_fp,
+                        }
+                        return True, ""
+
             message = str(resp.get("message") or resp.get("error") or "FYERS rejected the current access token")
             _FYERS_VALIDATION_CACHE = {
                 "valid": False,
@@ -1062,6 +1126,52 @@ INDEX_MAP = {
             "NSE:TATASTEEL-EQ", "NSE:TCS-EQ", "NSE:TECHM-EQ",
             "NSE:TITAN-EQ", "NSE:ULTRACEMCO-EQ", "NSE:ZOMATO-EQ",
             "NSE:INDUSINDBK-EQ", "NSE:INFY-EQ", "NSE:NESTLEIND-EQ"
+        ]
+    },
+    "FINNIFTY": {
+        "spot": "NSE:FINNIFTY-INDEX",
+        "future": None,
+        "label": "NIFTY FIN SERVICE",
+        "option_symbols": [
+            "NSE:FINNIFTY-INDEX",
+            "NSE:FINNIFTY",
+        ],
+        "components": [
+            "NSE:HDFCBANK-EQ", "NSE:ICICIBANK-EQ", "NSE:KOTAKBANK-EQ",
+            "NSE:AXISBANK-EQ", "NSE:SBIN-EQ", "NSE:BAJFINANCE-EQ",
+            "NSE:BAJAJFINSV-EQ", "NSE:HDFCLIFE-EQ", "NSE:SBILIFE-EQ",
+            "NSE:CHOLAFIN-EQ", "NSE:SHRIRAMFIN-EQ", "NSE:MUTHOOTFIN-EQ"
+        ]
+    },
+    "MIDCPNIFTY": {
+        "spot": "NSE:MIDCPNIFTY-INDEX",
+        "future": None,
+        "label": "NIFTY MID SELECT",
+        "option_symbols": [
+            "NSE:MIDCPNIFTY-INDEX",
+            "NSE:MIDCPNIFTY",
+        ],
+        "components": [
+            "NSE:FEDERALBNK-EQ", "NSE:ASHOKLEY-EQ", "NSE:AUROPHARMA-EQ",
+            "NSE:BHARATFORG-EQ", "NSE:CUMMINSIND-EQ", "NSE:GODREJPROP-EQ",
+            "NSE:HINDPETRO-EQ", "NSE:IDFCFIRSTB-EQ", "NSE:INDHOTEL-EQ",
+            "NSE:JINDALSTEL-EQ", "NSE:JUBLFOOD-EQ", "NSE:LUPIN-EQ"
+        ]
+    },
+    "BANKEX": {
+        "spot": "BSE:BANKEX-INDEX",
+        "future": None,
+        "label": "BSE BANKEX",
+        "option_symbols": [
+            "BSE:BANKEX-INDEX",
+            "BSE:BANKEX",
+            "BANKEX",
+        ],
+        "components": [
+            "NSE:HDFCBANK-EQ", "NSE:ICICIBANK-EQ", "NSE:KOTAKBANK-EQ",
+            "NSE:AXISBANK-EQ", "NSE:SBIN-EQ", "NSE:BANKBARODA-EQ",
+            "NSE:INDUSINDBK-EQ", "NSE:PNB-EQ", "NSE:FEDERALBNK-EQ",
+            "NSE:AUBANK-EQ"
         ]
     }
 }
@@ -9004,10 +9114,12 @@ def option_chain():
                 from optionsdesk_v195_routes import get_kotak_option_chain_data
                 kotak_chain = get_kotak_option_chain_data(symbol, requested_expiry)
                 if kotak_chain and kotak_chain.get("optionChain") and len(kotak_chain["optionChain"]) > 0:
-                    dashboard_data["optionChain"] = kotak_chain["optionChain"]
-                    dashboard_data["data"] = kotak_chain["optionChain"]
-                    dashboard_data["broker"] = "kotakneo"
-                    dashboard_data["dataSource"] = "kotakneo_live"
+                    has_real_oi = any((safe_float(r.get("ce_oi"), 0) > 0 or safe_float(r.get("pe_oi"), 0) > 0) for r in kotak_chain["optionChain"])
+                    if has_real_oi:
+                        dashboard_data["optionChain"] = kotak_chain["optionChain"]
+                        dashboard_data["data"] = kotak_chain["optionChain"]
+                        dashboard_data["broker"] = "kotakneo"
+                        dashboard_data["dataSource"] = "kotakneo_live"
                     if not dashboard_data.get("selectedExpiry"):
                         dashboard_data["selectedExpiry"] = kotak_chain.get("selectedExpiry")
                     if not dashboard_data.get("expiries"):
