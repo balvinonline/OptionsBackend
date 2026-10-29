@@ -232,6 +232,8 @@ export const MarketProvider = ({ children }) => {
   const prevSignalRef = useRef(null);
   const prevZoneRef = useRef({});
   const selectedIndexRef = useRef("NIFTY");
+  const socketRef = useRef(null);
+  const optionSymbolsRef = useRef([]);
   const globalPcrHistoryRef = useRef({});
   const [marketDataCache, setMarketDataCache] = useState({});
 
@@ -1261,6 +1263,7 @@ export const MarketProvider = ({ children }) => {
         "localtunnel-bypass": "true",
       },
     });
+    socketRef.current = socket;
 
     const tickBuffer = {};
     const chainTickBuffer = {}; // specific buffer for option chain symbols
@@ -1271,6 +1274,9 @@ export const MarketProvider = ({ children }) => {
       socket.emit("subscribe_strip", {
         symbols: LIVE_INDEXES.filter((s) => s !== selectedIndexRef.current),
       });
+      if (optionSymbolsRef.current.length) {
+        socket.emit("subscribe", { symbols: optionSymbolsRef.current });
+      }
     });
 
     socket.on("tick", (data) => {
@@ -1406,8 +1412,26 @@ export const MarketProvider = ({ children }) => {
     return () => {
       clearInterval(flushInterval);
       socket.disconnect();
+      if (socketRef.current === socket) socketRef.current = null;
     };
   }, [selectedIndex]);
+
+  // Subscribe to exact CE/PE contracts once the option chain is loaded or changed.
+  // Keep this separate from the socket lifecycle so live ticks do not reconnect the socket.
+  const optionSymbolSignature = (marketData?.optionChain || marketData?.chain || [])
+    .flatMap((row) => [row?.ce_symbol, row?.pe_symbol])
+    .filter((symbol) => typeof symbol === "string" && symbol.trim())
+    .map((symbol) => symbol.trim().toUpperCase());
+  const uniqueOptionSymbols = [...new Set(optionSymbolSignature)];
+  const optionSymbolsKey = uniqueOptionSymbols.join("|");
+
+  useEffect(() => {
+    const symbols = optionSymbolsKey ? optionSymbolsKey.split("|") : [];
+    optionSymbolsRef.current = symbols;
+    if (symbols.length && socketRef.current?.connected) {
+      socketRef.current.emit("subscribe", { symbols });
+    }
+  }, [optionSymbolsKey, selectedIndex]);
 
   useEffect(() => {
     let stream;
@@ -1474,9 +1498,10 @@ export const MarketProvider = ({ children }) => {
         console.error("Failed to fetch history candles:", error);
       }
       
-      // Retry faster if we have 0 candles
+      // Historical candles are not tick data. Refresh at most once per minute;
+      // the backend also caches responses and suppresses repeated FYERS quota errors.
       if (isMounted) {
-        timer = setTimeout(fetchIndexCandles, indexCandles.length === 0 ? 5000 : 60000);
+        timer = setTimeout(fetchIndexCandles, 60000);
       }
     };
 
