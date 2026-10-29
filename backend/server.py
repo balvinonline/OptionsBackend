@@ -9142,7 +9142,13 @@ def option_chain():
     try:
         selected = None
         catalog = None
-        broker_param = (request.args.get("broker") or "auto").strip().lower()
+        # Market data for the dashboard must always come from FYERS.
+        # Kotak Neo is reserved for order execution; never route dashboard
+        # option-chain quotes to Kotak based on a UI broker preference.
+        requested_broker = (request.args.get("broker") or "auto").strip().lower()
+        if requested_broker not in {"auto", "fyers"}:
+            print(f"[OptionChain] Ignoring market-data broker={requested_broker}; using FYERS for quotes/charts")
+        broker_param = "fyers"
         if broker_param == "kotakneo":
             try:
                 from optionsdesk_v195_routes import get_kotak_option_chain_data
