@@ -864,12 +864,22 @@ def fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=375):
     resolution_key = str(resolution or "5").upper()
     fyers_resolution = "D" if resolution_key in ("D", "1D") else str(resolution or "5")
     key = f"{symbol_key}:{fyers_resolution}:{lookback_minutes}"
-    cached = get_cached("fyers_history", key=key, ttl=8)
+
+    # FYERS -360 means the daily historical-request quota is exhausted.
+    # Suppress repeated rejected requests for 24 hours.
+    daily_limit = get_cached("fyers_history_rate_limit", key="daily", ttl=86400)
+    if daily_limit is not None:
+        return {**daily_limit, "symbol": symbol_key}
+
+    cached = get_cached("fyers_history", key=key, ttl=60)
     if cached is not None:
         return cached
 
     with get_fyers_history_lock(symbol_key):
-        cached = get_cached("fyers_history", key=key, ttl=8)
+        daily_limit = get_cached("fyers_history_rate_limit", key="daily", ttl=86400)
+        if daily_limit is not None:
+            return {**daily_limit, "symbol": symbol_key}
+        cached = get_cached("fyers_history", key=key, ttl=60)
         if cached is not None:
             return cached
 
@@ -923,12 +933,27 @@ def fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=375):
         last_response = None
         attempts = []
 
+        # Bound fallback attempts. The previous loop could issue dozens of
+        # individual daily requests for an unsupported symbol such as BSE:SENSEX.
+        candidate_windows = windows[:1]
+        if len(windows) > 1:
+            candidate_windows.append(windows[1])
+        if len(windows) > 2:
+            candidate_windows.append(windows[-1])
+        deduped_windows = []
+        seen_window_ranges = set()
+        for item in candidate_windows:
+            window_key = (item[0], item[1])
+            if window_key not in seen_window_ranges:
+                seen_window_ranges.add(window_key)
+                deduped_windows.append(item)
+
         for sym in symbols_to_try:
             if not sym:
                 continue
             combined = {}
             combined_windows = []
-            for from_ts, to_ts, window_label in windows:
+            for from_ts, to_ts, window_label in deduped_windows:
                 try:
                     payload = {
                         "symbol": sym,
@@ -953,12 +978,25 @@ def fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=375):
                         "candles": len(resp.get("candles", []) or []),
                     })
                     if quote_response_rate_limited(resp):
-                        return {
+                        message = str(resp.get("message") or resp.get("error") or "")
+                        is_daily_limit = safe_int(resp.get("code"), None) == -360 or "requests/day" in message.lower()
+                        rate_limit_result = {
                             "ok": False,
-                            "error": "Fyers history API is rate-limited. Try again after a few seconds.",
+                            "rateLimited": True,
+                            "dailyLimit": is_daily_limit,
+                            "error": (
+                                "FYERS daily historical-request limit reached. Historical requests are paused for 24 hours to avoid repeated rejected calls."
+                                if is_daily_limit
+                                else "FYERS history API is rate-limited. Retry after the cooldown."
+                            ),
                             "response": resp,
+                            "attempts": attempts[-10:],
                             **get_fyers_env_status(),
                         }
+                        if is_daily_limit:
+                            set_cached("fyers_history_rate_limit", rate_limit_result, key="daily")
+                        set_cached("fyers_history", rate_limit_result, key=key)
+                        return rate_limit_result
 
                     for row in resp.get("candles", []) or []:
                         if not isinstance(row, (list, tuple)) or len(row) < 5:
@@ -998,19 +1036,17 @@ def fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=375):
                 set_cached("fyers_history", result, key=key)
                 return result
 
-        yahoo_fallback = fetch_yahoo_history(symbol_key, fyers_resolution) if symbol_key in INDEX_MAP else None
-        if yahoo_fallback and yahoo_fallback.get("candles"):
-            set_cached("fyers_history", yahoo_fallback, key=key)
-            return yahoo_fallback
-
-        return {
+        result = {
             "ok": False,
             "symbol": symbol_key,
-            "error": "No Fyers candles returned for this symbol.",
+            "error": "No FYERS candles returned for this symbol.",
             "response": last_response,
             "attempts": attempts[-12:],
             **get_fyers_env_status(),
         }
+        # Cache transient failures briefly so chart polling does not hammer FYERS.
+        set_cached("fyers_history", result, key=key)
+        return result
 
 
 def build_quote_fallback_history(symbol_key, resolution="5"):
@@ -2175,7 +2211,13 @@ def build_trade_zones(spot, future, analytics, chain, history_snapshot=None):
 def quote_response_rate_limited(resp):
     if not isinstance(resp, dict):
         return False
-    return safe_int(resp.get("code"), None) == 429
+    code = safe_int(resp.get("code"), None)
+    message = str(resp.get("message") or resp.get("error") or "").lower()
+    return (
+        code in (429, -360)
+        or ("requests/day" in message and ("limit" in message or "exceed" in message))
+        or ("daily request limit" in message)
+    )
 
 
 def quote_block_has_value(block):
@@ -8528,14 +8570,9 @@ def fyers_history():
     lookback = safe_int(request.args.get("lookback"), 375)
     max_lookback = 180 * 24 * 60 if resolution in {"D", "1D"} else 90 * 24 * 60
     lookback = max(90, min(lookback or 375, max_lookback))
+    # FYERS is authoritative for this market-data endpoint. Do not silently
+    # replace unavailable FYERS candles with a different market-data provider.
     fyers_res = fetch_fyers_history(history_symbol, resolution=resolution, lookback_minutes=lookback)
-    if not fyers_res or not fyers_res.get("ok") or not fyers_res.get("candles"):
-        yahoo_res = fetch_yahoo_history(symbol, resolution=resolution)
-        if yahoo_res and yahoo_res.get("candles"):
-            yahoo_res["fyers_attempts"] = (fyers_res or {}).get("attempts", [])
-            yahoo_res["fyers_response"] = (fyers_res or {}).get("response", {})
-            yahoo_res["fyers_error"] = (fyers_res or {}).get("error", "No candles")
-            return jsonify(yahoo_res)
     return jsonify(fyers_res)
 
 
