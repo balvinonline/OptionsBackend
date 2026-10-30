@@ -153,6 +153,7 @@ const normalizeTickPayload = (payload) => {
       tick.day_change_pct,
     ),
     updated_at: tick.updated_at || payload.updated_at || formatTime(),
+    tickTimestamp: firstFiniteNumber(tick.ts, payload.ts, tick.timestampMs, payload.timestampMs),
     liveFeed: "stream",
   };
 };
@@ -1236,6 +1237,7 @@ export const MarketProvider = ({ children }) => {
           pct_change: tick.change_pct ?? base.pct_change,
           liveFeed: tick.liveFeed,
           updated_at: tick.updated_at,
+          tickTimestamp: tick.tickTimestamp,
         };
         setMarketDataCache((cache) => ({ ...cache, [tick.key]: updated }));
         return updated;
