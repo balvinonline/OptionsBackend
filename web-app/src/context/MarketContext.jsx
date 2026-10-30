@@ -1253,7 +1253,7 @@ export const MarketProvider = ({ children }) => {
   useEffect(() => {
     const socket = io(getApiBaseUrl(), {
       path: "/api/socket.io/",
-      transports: ["polling"],
+      transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
