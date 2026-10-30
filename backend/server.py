@@ -4332,16 +4332,10 @@ def get_option_chain_rows_for_index(symbol_key, spot_price, cache_ttl=8, strikec
 
     chain = parse_option_chain(raw_oc, spot_price)
 
-    if spot_price and chain and strikecount:
-        try:
-            chain = sorted(chain, key=lambda x: safe_float(x.get("strike"), 0) or 0)
-            closest_idx = min(range(len(chain)), key=lambda i: abs((safe_float(chain[i].get("strike"), 0) or 0) - spot_price))
-            half = int(strikecount) // 2
-            start_idx = max(0, closest_idx - half)
-            end_idx = min(len(chain), closest_idx + half + (1 if int(strikecount) % 2 != 0 else 0))
-            chain = chain[start_idx:end_idx]
-        except Exception:
-            pass
+    # FYERS already applies strikecount as ATM +/- N strikes. Do not
+    # apply a second, narrower client-side filter to the returned chain.
+    if chain:
+        chain = sorted(chain, key=lambda x: safe_float(x.get("strike"), 0) or 0)
 
     chain = enrich_chain_with_computed_iv(chain, spot_price, symbol_key, expiry_date=selected_date)
     chain = enrich_chain_with_greeks(chain, spot_price, symbol_key, expiry_date=selected_date)
@@ -4402,8 +4396,12 @@ def normalize_future_against_spot(spot, future, max_abs_basis_pct=0.75, source_s
     return future
 
 
-def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date=None, expiry_catalog=None, include_history=True):
-    dashboard_cache_key = f"{symbol_key}:{expiry_timestamp or expiry_date or 'front'}"
+def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date=None, expiry_catalog=None, include_history=True, strikecount=10):
+    try:
+        strikecount = max(1, min(50, int(strikecount)))
+    except (TypeError, ValueError):
+        strikecount = 10
+    dashboard_cache_key = f"{symbol_key}:{expiry_timestamp or expiry_date or 'front'}:{strikecount}"
     cached = get_cached("dashboard", key=dashboard_cache_key, ttl=cache_ttl)
     if cached is not None:
         return cached
@@ -4515,6 +4513,7 @@ def build_dashboard(symbol_key, cache_ttl=10, expiry_timestamp=None, expiry_date
     raw_oc, chain = get_option_chain_rows_for_index(
         symbol_key,
         spot_ltp,
+        strikecount=strikecount,
         expiry_timestamp=expiry_timestamp,
         expiry_date=expiry_date,
     )
@@ -9114,9 +9113,13 @@ def dashboard():
     symbol = (request.args.get("symbol") or request.args.get("index") or "NIFTY").strip().upper()
     if symbol not in INDEX_MAP:
         symbol = "NIFTY"
+    try:
+        strikecount = max(1, min(50, int(request.args.get("strikecount", 10))))
+    except (TypeError, ValueError):
+        strikecount = 10
 
     try:
-        data = build_dashboard(symbol)
+        data = build_dashboard(symbol, strikecount=strikecount)
         return jsonify(data)
     except Exception as e:
         print("dashboard error:", e)
