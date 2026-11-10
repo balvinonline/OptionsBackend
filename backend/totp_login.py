@@ -61,7 +61,6 @@ def generate_fyers_token_via_totp(fyers_id, fyers_pin, totp_key, client_id, secr
     # 1. Generate current 6-digit TOTP code
     totp = pyotp.TOTP(totp_key)
     current_otp = str(totp.now()).zfill(6)
-    print(f"[*] Generated TOTP OTP for {fyers_id}: {current_otp}")
 
     headers = {
         "Accept": "application/json",
@@ -146,7 +145,6 @@ def generate_fyers_token_via_totp(fyers_id, fyers_pin, totp_key, client_id, secr
     if not auth_code:
         raise RuntimeError(f"Step 4 did not return auth_code in URL: {url_with_code}")
 
-    print(f"[*] Successfully obtained auth_code: {auth_code[:10]}...")
 
     # 6. Step 5: Exchange auth_code for Access Token
     session = fyersModel.SessionModel(
@@ -207,7 +205,6 @@ def main():
         )
         save_env_value(env_path, "FYERS_ACCESS_TOKEN", token)
         print(f"\n🎉 SUCCESS! Generated new FYERS_ACCESS_TOKEN:")
-        print(f"{token[:15]}...{token[-10:]}")
         print(f"Saved automatically to {env_path}")
     except Exception as e:
         print(f"\n❌ Error during TOTP login: {e}")
