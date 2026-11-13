@@ -317,16 +317,20 @@ def _load_kotak_sdk():
         raise RuntimeError("Kotak Neo SDK is not installed. Add kotakneoapi==3.0.1 to requirements.txt") from exc
 
 
-def _new_kotak_client():
-    consumer_key = os.getenv("KOTAK_NEO_CONSUMER_KEY", "").strip()
-    if not consumer_key:
+def _new_kotak_client(consumer_key: str | None = None):
+    key = str(consumer_key or os.getenv("KOTAK_NEO_CONSUMER_KEY", "")).strip()
+    if not key:
         raise RuntimeError("KOTAK_NEO_CONSUMER_KEY is missing")
     NeoAPI = _load_kotak_sdk()
-    return NeoAPI(consumer_key=consumer_key, environment="prod")
+    return NeoAPI(consumer_key=key, environment="prod")
 
 
-def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
+def _perform_kotak_login(totp: str | None = None, mpin: str | None = None, consumer_key: str | None = None, mobile: str | None = None):
     global _KOTAK_CLIENT, _KOTAK_SESSION_READY, _KOTAK_SESSION_AT
+    if consumer_key:
+        os.environ["KOTAK_NEO_CONSUMER_KEY"] = str(consumer_key).strip()
+    if mobile:
+        os.environ["KOTAK_NEO_MOBILE"] = str(mobile).strip()
     totp_val = str(totp or "").strip() or _get_auto_totp()
     mpin_val = str(mpin or "").strip() or _get_mpin_from_env()
 
@@ -336,18 +340,18 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
         raise ValueError(f"Kotak Neo MPIN must be exactly 6 digits (received {len(mpin_val)} digits). Kotak Neo uses a 6-digit MPIN (the PIN used to open the Kotak Neo app), not a 4-digit ATM/banking PIN.")
 
     with _KOTAK_LOCK:
-        client = _new_kotak_client()
-        mobile = os.getenv("KOTAK_NEO_MOBILE", "").strip()
+        client = _new_kotak_client(consumer_key=consumer_key)
+        mob = str(mobile or os.getenv("KOTAK_NEO_MOBILE", "")).strip()
         ucc = os.getenv("KOTAK_NEO_UCC", "").strip()
-        if not mobile or not ucc:
+        if not mob or not ucc:
             raise ValueError("KOTAK_NEO_MOBILE and KOTAK_NEO_UCC must be configured.")
-        if len(mobile) == 10 and mobile.isdigit():
-            mobile = f"+91{mobile}"
-        elif len(mobile) == 12 and mobile.startswith("91") and mobile.isdigit():
-            mobile = f"+{mobile}" 
+        if len(mob) == 10 and mob.isdigit():
+            mob = f"+91{mob}"
+        elif len(mob) == 12 and mob.startswith("91") and mob.isdigit():
+            mob = f"+{mob}" 
 
         login_resp = client.totp_login(
-            mobile_number=mobile,
+            mobile_number=mob,
             ucc=ucc,
             totp=totp_val,
         )
@@ -1002,19 +1006,53 @@ def register_optionsdesk_v195_routes(app):
                 pass
         return jsonify({"ok": True, **_kotak_config()})
 
+    @app.route("/api/kotakneo/credentials", methods=["POST"])
+    @_require_mobile_auth
+    def kotakneo_credentials():
+        body = request.get_json(silent=True) or {}
+        api_key = str(body.get("apiKey") or body.get("consumerKey") or "").strip()
+        secret = str(body.get("secret") or body.get("consumerSecret") or "").strip()
+        mobile = str(body.get("mobile") or "").strip()
+        ucc = str(body.get("ucc") or "").strip()
+        if api_key:
+            os.environ["KOTAK_NEO_CONSUMER_KEY"] = api_key
+        if secret:
+            os.environ["KOTAK_NEO_CONSUMER_SECRET"] = secret
+        if mobile:
+            os.environ["KOTAK_NEO_MOBILE"] = mobile
+        if ucc:
+            os.environ["KOTAK_NEO_UCC"] = ucc
+        return jsonify({"ok": True, "message": "Kotak credentials updated successfully"})
+
     @app.route("/api/kotakneo/login", methods=["POST"])
     @_require_mobile_auth
     def kotakneo_login():
+        body = request.get_json(silent=True) or {}
+        consumer_key_input = str(body.get("consumerKey") or body.get("apiKey") or "").strip()
+        secret_input = str(body.get("secret") or body.get("consumerSecret") or "").strip()
+        mobile_input = str(body.get("mobile") or "").strip()
+        if consumer_key_input:
+            os.environ["KOTAK_NEO_CONSUMER_KEY"] = consumer_key_input
+        if secret_input:
+            os.environ["KOTAK_NEO_CONSUMER_SECRET"] = secret_input
+        if mobile_input:
+            os.environ["KOTAK_NEO_MOBILE"] = mobile_input
+
         config = _kotak_config()
         if not config["configured"]:
             return jsonify({"ok": False, "error": "Kotak Neo backend variables are incomplete"}), 503
         if not config["staticIpReady"]:
             return jsonify({"ok": False, "error": "Backend outbound IP does not match KOTAK_NEO_WHITELISTED_IP"}), 409
-        body = request.get_json(silent=True) or {}
+
         totp_input = str(body.get("totp") or "").strip()
         mpin_input = str(body.get("mpin") or "").strip()
         try:
-            result = _perform_kotak_login(totp=totp_input or None, mpin=mpin_input or None)
+            result = _perform_kotak_login(
+                totp=totp_input or None,
+                mpin=mpin_input or None,
+                consumer_key=consumer_key_input or None,
+                mobile=mobile_input or None,
+            )
             return jsonify({
                 "ok": True,
                 "message": "Kotak Neo trading session ready",
