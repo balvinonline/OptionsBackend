@@ -178,12 +178,12 @@ def _require_mobile_auth(fn):
 
 def _outbound_ip():
     now = time.time()
-    if _IP_CACHE["value"] and now - _IP_CACHE["at"] < 30:
+    if _IP_CACHE["value"] and now - _IP_CACHE["at"] < 3600:
         return _IP_CACHE["value"]
     try:
-        value = requests.get("https://api.ipify.org", timeout=4).text.strip()
+        value = requests.get("https://api.ipify.org", timeout=2).text.strip()
     except Exception:
-        value = ""
+        value = _IP_CACHE.get("value") or "74.220.48.166"
     _IP_CACHE.update({"at": now, "value": value})
     return value
 
@@ -1394,12 +1394,27 @@ def register_optionsdesk_v195_routes(app):
                 _RECENT_ORDER_IDS.pop(client_order_id, None)
                 low_err = str(err_val or resp_dict.get("message") or "").lower()
                 if st_code == 100008 or "100008" in low_err or "unauthorized" in low_err:
+                    _KOTAK_SESSION_READY = False
+                    _KOTAK_CLIENT = None
+                    for path in (_SESSION_CACHE_FILE, _LOCAL_SESSION_CACHE_FILE):
+                        try:
+                            if os.path.exists(path):
+                                os.remove(path)
+                        except Exception:
+                            pass
                     cur_ip = _outbound_ip() or "74.220.48.166"
                     err_msg = (
                         f"Kotak Neo rejected order (Error 100008: Unauthorized). "
-                        f"Request was sent from backend IP {cur_ip}. "
-                        f"Please ensure {cur_ip} (Primary) and 74.220.48.179 (Secondary) are added to your Whitelisted IPs in trade.kotakneo.com/trade-api."
+                        f"Your session has expired. Please open Broker Connections and start a fresh live session with today's TOTP + MPIN."
                     )
+                    return jsonify({
+                        "ok": False,
+                        "status": "REJECTED",
+                        "error": err_msg,
+                        "stCode": 100008,
+                        "sessionExpired": True,
+                        "data": _sanitize_for_json(resp_dict)
+                    }), 401
                 else:
                     err_msg = str(err_val or resp_dict.get("message") or "Kotak Neo rejected the order")
                 return jsonify({"ok": False, "error": err_msg, "data": _sanitize_for_json(resp_dict)}), 400
