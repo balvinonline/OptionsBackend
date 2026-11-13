@@ -683,7 +683,10 @@ def auto_refresh_fyers_token_if_needed():
                 print("[+] [Auto-Refresh] Successfully generated fresh Fyers token via TOTP!")
                 return True
         except Exception as exc:
+            err_str = str(exc)
             print(f"[-] [Auto-Refresh] Fyers TOTP renewal failed: {exc}")
+            if "1015" in err_str or "rate limited" in err_str or "429" in err_str:
+                _LAST_AUTO_LOGIN_ATTEMPT = now + 300
             return False
     return False
 
@@ -8355,32 +8358,42 @@ def fyers_save_token():
     secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
     redirect_uri = get_fyers_redirect_uri()
 
-    if direct_token and looks_like_raw_fyers_auth_code(direct_token):
-        payload["authCode"] = direct_token
-        direct_token = ""
-
     if direct_token:
         access_token = normalize_fyers_access_token(client_id, direct_token)
-        save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
-        mark_fyers_token_ready(client_id, access_token)
-        refresh_fyers_from_env(force=True)
-        _FYERS_VALIDATION_CACHE = {
-            "valid": True,
-            "error": "",
-            "cached_at": time.time(),
-            "token_fingerprint": str(access_token or "")[-20:],
-        }
-        _QUOTE_COOLDOWN_UNTIL = 0.0
-        clear_live_market_caches()
-        return jsonify({
-            "ok": True,
-            "message": "Fyers access token saved and connection initialized.",
-            "tokenValid": True,
-            "accessToken": access_token,
-            "access_token": access_token,
-            "tokenValidationError": None,
-            **get_fyers_env_status(),
-        })
+        is_active_token = False
+        if fyersModel and client_id:
+            try:
+                test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+                configure_fyers_timeout(test_inst)
+                test_prof = test_inst.get_profile() or {}
+                if test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"):
+                    is_active_token = True
+            except Exception:
+                pass
+
+        if is_active_token or not looks_like_raw_fyers_auth_code(direct_token):
+            save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
+            mark_fyers_token_ready(client_id, access_token)
+            refresh_fyers_from_env(force=True)
+            _FYERS_VALIDATION_CACHE = {
+                "valid": True,
+                "error": "",
+                "cached_at": time.time(),
+                "token_fingerprint": str(access_token or "")[-20:],
+            }
+            _QUOTE_COOLDOWN_UNTIL = 0.0
+            clear_live_market_caches()
+            return jsonify({
+                "ok": True,
+                "message": "Fyers access token verified and active for today.",
+                "tokenValid": True,
+                "accessToken": access_token,
+                "access_token": access_token,
+                "tokenValidationError": None,
+                **get_fyers_env_status(),
+            })
+        else:
+            payload["authCode"] = direct_token
 
     auth_code = extract_fyers_auth_code(payload.get("authCode") or payload.get("finalUrl"))
 

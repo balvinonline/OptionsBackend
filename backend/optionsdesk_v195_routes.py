@@ -32,6 +32,7 @@ _RECENT_ORDER_IDS = {}
 _DAILY_ORDER_COUNT = {"day": "", "count": 0}
 _IP_CACHE = {"at": 0.0, "value": ""}
 _SESSION_CACHE_FILE = os.path.join(tempfile.gettempdir(), "kotak_session_cache_v2.json")
+_LOCAL_SESSION_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".kotak_session_cache.json")
 
 
 def _sanitize_for_json(obj):
@@ -62,33 +63,49 @@ def _save_kotak_session(client, session_at: str):
             "sid": getattr(cfg, "sid", None),
             "ucc": getattr(cfg, "ucc", None),
             "userId": getattr(cfg, "userId", None),
+            "consumer_key": getattr(cfg, "consumer_key", None) or os.getenv("KOTAK_NEO_CONSUMER_KEY"),
             "saved_at": time.time(),
         }
-        with open(_SESSION_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f)
+        for path in (_SESSION_CACHE_FILE, _LOCAL_SESSION_CACHE_FILE):
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+            except Exception:
+                pass
     except Exception as exc:
         logger.warning(f"Could not save Kotak session tokens to disk: {exc}")
 
 
 def _restore_kotak_session():
-    """Restore active Kotak session from disk if within same trading day."""
+    """Restore active Kotak session from disk if within same trading day (< 16 hours)."""
     global _KOTAK_CLIENT, _KOTAK_SESSION_READY, _KOTAK_SESSION_AT
-    if _KOTAK_SESSION_READY and _KOTAK_CLIENT:
+    if _KOTAK_SESSION_READY and _KOTAK_CLIENT and getattr(getattr(_KOTAK_CLIENT, "configuration", None), "edit_token", None):
         return True
     try:
-        if not os.path.exists(_SESSION_CACHE_FILE):
-            return False
-        with open(_SESSION_CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        saved_at = data.get("saved_at", 0)
-        if time.time() - saved_at > 16 * 3600:
-            return False
-        edit_token = data.get("edit_token")
-        edit_sid = data.get("edit_sid")
-        if not edit_token or not edit_sid:
+        data = None
+        for path in (_SESSION_CACHE_FILE, _LOCAL_SESSION_CACHE_FILE):
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        candidate = json.load(f)
+                    if candidate.get("edit_token") and candidate.get("edit_sid"):
+                        saved_at = candidate.get("saved_at", 0)
+                        if time.time() - saved_at < 16 * 3600:
+                            data = candidate
+                            break
+                except Exception:
+                    pass
+
+        if not data:
             return False
 
-        client = _new_kotak_client()
+        edit_token = data.get("edit_token")
+        edit_sid = data.get("edit_sid")
+        consumer_key = data.get("consumer_key") or os.getenv("KOTAK_NEO_CONSUMER_KEY")
+        if not edit_token or not edit_sid or not consumer_key:
+            return False
+
+        client = _new_kotak_client(consumer_key=consumer_key)
         cfg = client.configuration
         cfg.edit_token = edit_token
         cfg.edit_sid = edit_sid
@@ -279,6 +296,9 @@ def _is_auto_totp_configured() -> bool:
 
 
 def _kotak_config():
+    global _KOTAK_SESSION_READY, _KOTAK_CLIENT
+    if not _KOTAK_SESSION_READY or _KOTAK_CLIENT is None:
+        _restore_kotak_session()
     outbound = _outbound_ip()
     whitelisted = os.getenv("KOTAK_NEO_WHITELISTED_IP", "").strip()
     configured = all([
@@ -380,8 +400,22 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None, consu
         _KOTAK_SESSION_READY = True
         _KOTAK_SESSION_AT = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
         _save_kotak_session(client, _KOTAK_SESSION_AT)
+        cfg = getattr(client, "configuration", None)
+        session_data = {
+            "sessionAt": _KOTAK_SESSION_AT,
+            "edit_token": getattr(cfg, "edit_token", None),
+            "edit_sid": getattr(cfg, "edit_sid", None),
+            "view_token": getattr(cfg, "view_token", None),
+            "bearer_token": getattr(cfg, "bearer_token", None),
+            "sid": getattr(cfg, "sid", None),
+            "ucc": getattr(cfg, "ucc", None),
+            "userId": getattr(cfg, "userId", None),
+            "consumer_key": getattr(cfg, "consumer_key", None) or os.getenv("KOTAK_NEO_CONSUMER_KEY"),
+            "saved_at": time.time(),
+        }
         return {
             "sessionAt": _KOTAK_SESSION_AT,
+            "sessionData": session_data,
             "loginResp": login_resp,
             "validateResp": validate_resp,
         }
@@ -1057,10 +1091,46 @@ def register_optionsdesk_v195_routes(app):
                 "ok": True,
                 "message": "Kotak Neo trading session ready",
                 "sessionAt": result.get("sessionAt"),
+                "sessionData": result.get("sessionData"),
                 "autoTotp": not bool(totp_input),
             })
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
+
+    @app.route("/api/kotakneo/resume-session", methods=["POST"])
+    @_require_mobile_auth
+    def kotakneo_resume_session():
+        global _KOTAK_CLIENT, _KOTAK_SESSION_READY, _KOTAK_SESSION_AT
+        body = request.get_json(silent=True) or {}
+        session_data = body.get("sessionData") or body
+        edit_token = session_data.get("edit_token")
+        edit_sid = session_data.get("edit_sid")
+        consumer_key = session_data.get("consumer_key") or os.getenv("KOTAK_NEO_CONSUMER_KEY")
+
+        if not edit_token or not edit_sid:
+            if _restore_kotak_session():
+                return jsonify({"ok": True, "sessionReady": True, "sessionAt": _KOTAK_SESSION_AT, "message": "Restored Kotak session from disk"})
+            return jsonify({"ok": False, "sessionReady": False, "error": "Missing edit_token or edit_sid"}), 400
+
+        try:
+            client = _new_kotak_client(consumer_key=consumer_key)
+            cfg = client.configuration
+            cfg.edit_token = edit_token
+            cfg.edit_sid = edit_sid
+            cfg.view_token = session_data.get("view_token")
+            cfg.bearer_token = session_data.get("bearer_token")
+            cfg.sid = session_data.get("sid")
+            cfg.ucc = session_data.get("ucc")
+            cfg.userId = session_data.get("userId")
+
+            _KOTAK_CLIENT = client
+            _KOTAK_SESSION_READY = True
+            _KOTAK_SESSION_AT = session_data.get("sessionAt") or datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
+            _save_kotak_session(client, _KOTAK_SESSION_AT)
+            logger.info(f"Successfully resumed Kotak Neo session via resume-session endpoint ({_KOTAK_SESSION_AT})")
+            return jsonify({"ok": True, "sessionReady": True, "sessionAt": _KOTAK_SESSION_AT, "message": "Kotak Neo session resumed successfully"})
+        except Exception as exc:
+            return jsonify({"ok": False, "sessionReady": False, "error": str(exc)}), 400
 
     @app.route("/api/kotakneo/resolve-contract", methods=["POST"])
     @_require_mobile_auth
