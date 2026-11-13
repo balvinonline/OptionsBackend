@@ -7087,11 +7087,13 @@ def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
 
     # If the user requested a specific expiry (e.g. December or January) and target_ts is not the first expiry,
     # fetch the exact option chain for that expiry using Fyers's authentic timestamp!
-    if target_ts:
-        rows_now = _extract_option_rows_from_data(data)
-        first_row_ts = str(rows_now[0].get("expiry_timestamp") or rows_now[0].get("expiry") or "").strip() if rows_now else ""
-        if first_row_ts and first_row_ts != target_ts:
-            raw_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24, expiry_timestamp=target_ts)
+    first_exp_ts = str(raw_exp_data[0].get("expiry") or raw_exp_data[0].get("timestamp") or "").strip() if (isinstance(raw_exp_data, list) and raw_exp_data) else ""
+    if target_ts and target_ts != first_exp_ts:
+        second_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24, expiry_timestamp=target_ts)
+        if second_chain:
+            second_rows = _extract_option_rows_from_data(second_chain.get("data", second_chain) if isinstance(second_chain, dict) else second_chain)
+            if second_rows:
+                raw_chain = second_chain
 
     chain = parse_option_chain(raw_chain, spot_price)
     if chain:
