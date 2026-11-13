@@ -7037,6 +7037,7 @@ def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
     expiry_ts = None
     if clean_exp and clean_exp not in ("CURRENT", "DEFAULT", "ALL"):
         try:
+            from zoneinfo import ZoneInfo
             import datetime as dt_mod
             parts = clean_exp.replace("/", "-").split("-")
             months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
@@ -7047,7 +7048,7 @@ def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
                 target_dt = dt_mod.datetime(y, m, d, 15, 30, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
                 expiry_ts = int(target_dt.timestamp())
         except Exception as e:
-            logger.warning(f"Failed to convert expiry '{clean_exp}' to timestamp: {e}")
+            print(f"Failed to convert expiry '{clean_exp}' to timestamp: {e}")
 
     raw_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24, expiry_timestamp=expiry_ts)
     chain = parse_option_chain(raw_chain, spot_price)
