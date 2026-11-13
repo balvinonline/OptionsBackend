@@ -1116,6 +1116,86 @@ def register_optionsdesk_v195_routes(app):
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
+    def _fetch_kotak_order_rms_status(client, order_id):
+        """
+        Polls Kotak Neo API for immediate RMS order status (rejection reason or execution status).
+        Returns (status, reason, raw_dict).
+        status: 'REJECTED' | 'COMPLETE' | 'OPEN' | None
+        """
+        if not client or not order_id:
+            return None, None, None
+
+        order_id_str = str(order_id).strip()
+        if not order_id_str.isdigit():
+            return None, None, None
+
+        for attempt in range(3):
+            # Allow Kotak RMS 350ms on first attempt, then 400ms on subsequent attempts
+            time.sleep(0.35 if attempt == 0 else 0.40)
+            try:
+                # 1. Try order_history (gives status timeline for the order)
+                with _KOTAK_LOCK:
+                    hist = client.order_history(order_id=order_id_str)
+
+                rows = []
+                if isinstance(hist, dict):
+                    d = hist.get("data")
+                    if isinstance(d, list):
+                        rows = d
+                    elif isinstance(d, dict):
+                        rows = d.get("data") if isinstance(d.get("data"), list) else [d]
+                elif isinstance(hist, list):
+                    rows = hist
+
+                for r in reversed(rows):
+                    if isinstance(r, dict) and r:
+                        ord_st = str(r.get("ordSt") or r.get("status") or "").strip().lower()
+                        rej_rsn = str(r.get("rejRsn") or r.get("errMsg") or r.get("text") or "").strip()
+                        if rej_rsn in {"--", "NA", "None", "null"}:
+                            rej_rsn = ""
+                        if ord_st in {"rejected", "cancelled", "canc"} or rej_rsn:
+                            return "REJECTED", (rej_rsn or f"Kotak Neo rejected order ({ord_st})"), r
+                        if ord_st in {"complete", "traded", "filled"}:
+                            return "COMPLETE", None, r
+                        if ord_st in {"open", "pending", "trigger_pending", "amo"}:
+                            return "OPEN", None, r
+
+                # 2. If order_history was empty or ambiguous, check order_report by id
+                try:
+                    with _KOTAK_LOCK:
+                        rep = client.order_report(order_id=order_id_str)
+                    rep_rows = []
+                    if isinstance(rep, dict):
+                        d = rep.get("data")
+                        if isinstance(d, list):
+                            rep_rows = d
+                        elif isinstance(d, dict):
+                            rep_rows = d.get("data") if isinstance(d.get("data"), list) else [d]
+                        elif "ordSt" in rep:
+                            rep_rows = [rep]
+                    elif isinstance(rep, list):
+                        rep_rows = rep
+
+                    for r in reversed(rep_rows):
+                        if isinstance(r, dict) and r:
+                            ord_st = str(r.get("ordSt") or r.get("status") or "").strip().lower()
+                            rej_rsn = str(r.get("rejRsn") or r.get("errMsg") or r.get("text") or "").strip()
+                            if rej_rsn in {"--", "NA", "None", "null"}:
+                                rej_rsn = ""
+                            if ord_st in {"rejected", "cancelled", "canc"} or rej_rsn:
+                                return "REJECTED", (rej_rsn or f"Kotak Neo rejected order ({ord_st})"), r
+                            if ord_st in {"complete", "traded", "filled"}:
+                                return "COMPLETE", None, r
+                            if ord_st in {"open", "pending", "trigger_pending", "amo"}:
+                                return "OPEN", None, r
+                except Exception as e_rep:
+                    logger.debug(f"order_report check failed: {e_rep}")
+
+            except Exception as e_hist:
+                logger.warning(f"Error querying order history for {order_id_str}: {e_hist}")
+
+        return None, None, None
+
     @app.route("/api/kotakneo/order", methods=["POST"])
     @_require_mobile_auth
     def kotakneo_order():
@@ -1256,8 +1336,46 @@ def register_optionsdesk_v195_routes(app):
 
             order_no = resp_dict.get("nOrdNo") or resp_dict.get("orderId") or client_order_id
             _DAILY_ORDER_COUNT["count"] += 1
+
+            # Fetch immediate RMS status (insufficient funds, rejection reason, or execution) from Kotak Neo
+            rms_status, rms_reason, rms_item = _fetch_kotak_order_rms_status(_KOTAK_CLIENT, order_no)
+
+            if rms_status == "REJECTED":
+                _RECENT_ORDER_IDS.pop(client_order_id, None)
+                logger.info(f"Kotak Neo RMS rejected order #{order_no}: {rms_reason}")
+                return jsonify({
+                    "ok": False,
+                    "status": "REJECTED",
+                    "error": rms_reason,
+                    "rejectReason": rms_reason,
+                    "orderNumber": str(order_no),
+                    "tradingSymbol": trading_symbol,
+                    "data": _sanitize_for_json(rms_item or resp_dict),
+                }), 400
+
+            if rms_status == "COMPLETE":
+                return jsonify({
+                    "ok": True,
+                    "status": "COMPLETE",
+                    "message": f"Live order executed by Kotak Neo (Order #{order_no})",
+                    "orderNumber": str(order_no),
+                    "tradingSymbol": trading_symbol,
+                    "data": _sanitize_for_json(rms_item or resp_dict),
+                })
+
+            if rms_status == "OPEN":
+                return jsonify({
+                    "ok": True,
+                    "status": "OPEN",
+                    "message": f"Live order placed and open on Kotak Neo (Order #{order_no})",
+                    "orderNumber": str(order_no),
+                    "tradingSymbol": trading_symbol,
+                    "data": _sanitize_for_json(rms_item or resp_dict),
+                })
+
             return jsonify({
                 "ok": True,
+                "status": "SUCCESS",
                 "message": f"Live order accepted by Kotak Neo (Order #{order_no})",
                 "orderNumber": str(order_no),
                 "tradingSymbol": trading_symbol,
