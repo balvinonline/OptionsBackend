@@ -1200,10 +1200,20 @@ def register_optionsdesk_v195_routes(app):
             resp_dict = response if isinstance(response, dict) else {}
             err_val = resp_dict.get("Error") or resp_dict.get("Error Message") or resp_dict.get("errMsg")
             stat = str(resp_dict.get("stat") or "").lower()
+            st_code = resp_dict.get("stCode")
 
-            if err_val or (stat and stat not in {"ok", "success"}):
+            if err_val or st_code == 100008 or (stat and stat not in {"ok", "success"}):
                 _RECENT_ORDER_IDS.pop(client_order_id, None)
-                err_msg = str(err_val or resp_dict.get("message") or "Kotak Neo rejected the order")
+                low_err = str(err_val or resp_dict.get("message") or "").lower()
+                if st_code == 100008 or "100008" in low_err or "unauthorized" in low_err:
+                    cur_ip = _outbound_ip() or "74.220.48.166"
+                    err_msg = (
+                        f"Kotak Neo rejected order (Error 100008: Unauthorized). "
+                        f"Request was sent from backend IP {cur_ip}. "
+                        f"Please ensure {cur_ip} (Primary) and 74.220.48.179 (Secondary) are added to your Whitelisted IPs in trade.kotakneo.com/trade-api."
+                    )
+                else:
+                    err_msg = str(err_val or resp_dict.get("message") or "Kotak Neo rejected the order")
                 return jsonify({"ok": False, "error": err_msg, "data": _sanitize_for_json(resp_dict)}), 400
 
             order_no = resp_dict.get("nOrdNo") or resp_dict.get("orderId") or client_order_id
