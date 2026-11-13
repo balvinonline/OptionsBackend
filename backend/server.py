@@ -533,12 +533,11 @@ def get_request_fyers_client():
 
     clean_req_token = normalize_fyers_access_token(client_id, req_token) if req_token else None
 
-    # If server client is healthy and not cooldown, use it
-    if fyers is not None and time.time() >= _QUOTE_COOLDOWN_UNTIL:
-        return fyers
-
-    # If server client has expired and client passed a valid token, adopt it!
+    # 1. If client provided a token in the request header, validate and adopt it!
     if clean_req_token:
+        server_token = getattr(fyers, "token", "") if fyers else FYERS_ACCESS_TOKEN
+        if server_token == clean_req_token and fyers is not None and time.time() >= _QUOTE_COOLDOWN_UNTIL:
+            return fyers
         try:
             inst = fyersModel.FyersModel(
                 client_id=client_id,
@@ -548,12 +547,16 @@ def get_request_fyers_client():
             )
             configure_fyers_timeout(inst)
             prof = inst.get_profile() or {}
-            if prof.get("s") == "ok" or prof.get("code") == 200:
+            if prof.get("s") == "ok" or prof.get("code") == 200 or prof.get("data"):
                 mark_fyers_token_ready(client_id, clean_req_token)
                 refresh_fyers_from_env(force=True)
                 return inst
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[get_request_fyers_client] Adoption of client token failed: {e}")
+
+    # 2. Fallback: use server client if available and not in cooldown
+    if fyers is not None and time.time() >= _QUOTE_COOLDOWN_UNTIL:
+        return fyers
 
     return fyers
 
@@ -3040,6 +3043,7 @@ def get_option_chain_raw(symbol_or_symbols, fallback_symbol=None, strikecount=12
                     _SUCCESSFUL_OC_SYMBOLS[first_candidate] = sym
                 if isinstance(resp, dict):
                     resp["_clean_requestedExpiryTimestamp"] = str(expiry_timestamp or "").strip() or None
+                    resp["_strict_requestedExpiryTimestamp"] = str(expiry_timestamp or "").strip() or None
                 return resp
 
         except Exception as e:
@@ -3315,7 +3319,11 @@ def _strict_pick(obj, keys, default=None):
 def _strict_expiry_meta(raw):
     data = raw.get("data", raw) if isinstance(raw, dict) else {}
     expiry_data = data.get("expiryData", []) if isinstance(data, dict) else []
-    requested = str((raw or {}).get("_strict_requestedExpiryTimestamp") or "").strip() if isinstance(raw, dict) else ""
+    requested = str(
+        (raw or {}).get("_strict_requestedExpiryTimestamp")
+        or (raw or {}).get("_clean_requestedExpiryTimestamp")
+        or ""
+    ).strip() if isinstance(raw, dict) else ""
     expiries = []
     selected = None
     for item in expiry_data if isinstance(expiry_data, list) else []:
@@ -7064,10 +7072,25 @@ def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
 
     spot_price = safe_float(quote.get("ltp"), None)
 
-    # For stock options, fetch initial option chain to inspect authentic Fyers expiryData
-    raw_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24)
+    # For stock options, query the underlying stock symbol (NSE:RELIANCE-EQ), NOT the futures contract
+    raw_chain = get_option_chain_raw([stock_symbol], stock_symbol, strikecount=24)
     data = raw_chain.get("data", raw_chain) if isinstance(raw_chain, dict) else {}
     raw_exp_data = data.get("expiryData", []) if isinstance(data, dict) else []
+
+    def _normalize_date_cmp(s):
+        if not s:
+            return ""
+        txt = str(s).strip().upper().replace("/", "-")
+        month_map = {
+            "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
+            "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08",
+            "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12"
+        }
+        for m_name, m_num in month_map.items():
+            txt = txt.replace(m_name, m_num)
+        return txt
+
+    clean_norm = _normalize_date_cmp(clean_exp)
 
     # Extract authentic expiries from Fyers response and find target timestamp for requested expiry
     expiries_list = []
@@ -7079,25 +7102,34 @@ def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
                 expiries_list.append(d_str)
                 ts = str(item.get("expiry") or item.get("timestamp") or "").strip()
                 if clean_exp and ts:
-                    # Match exact string or date components (e.g., 29-12-2026 vs 29-DEC-2026)
-                    c_norm = clean_exp.replace("DEC", "12").replace("NOV", "11").replace("JAN", "01").replace("FEB", "02").replace("MAR", "03")
-                    d_norm = d_str.replace("DEC", "12").replace("NOV", "11").replace("JAN", "01").replace("FEB", "02").replace("MAR", "03")
-                    if c_norm == d_norm or clean_exp in d_str or d_str in clean_exp:
+                    d_norm = _normalize_date_cmp(d_str)
+                    if clean_exp == d_str or clean_norm == d_norm or clean_exp in d_str or d_str in clean_exp:
                         target_ts = ts
+                    elif len(clean_norm.split("-")) == 3 and len(d_norm.split("-")) == 3:
+                        if clean_norm.split("-")[1:] == d_norm.split("-")[1:]:
+                            target_ts = ts
 
     # If the user requested a specific expiry (e.g. December or January) and target_ts is not the first expiry,
-    # fetch the exact option chain for that expiry using Fyers's authentic timestamp!
+    # fetch the exact option chain for that expiry using Fyers's authentic timestamp on the underlying stock symbol!
     first_exp_ts = str(raw_exp_data[0].get("expiry") or raw_exp_data[0].get("timestamp") or "").strip() if (isinstance(raw_exp_data, list) and raw_exp_data) else ""
     if target_ts and target_ts != first_exp_ts:
-        second_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24, expiry_timestamp=target_ts)
+        second_chain = get_option_chain_raw([stock_symbol], stock_symbol, strikecount=24, expiry_timestamp=target_ts)
         if second_chain:
             second_rows = _extract_option_rows_from_data(second_chain.get("data", second_chain) if isinstance(second_chain, dict) else second_chain)
             if second_rows:
+                if isinstance(second_chain, dict):
+                    second_chain["_strict_requestedExpiryTimestamp"] = target_ts
+                    second_chain["_clean_requestedExpiryTimestamp"] = target_ts
                 raw_chain = second_chain
 
     chain = parse_option_chain(raw_chain, spot_price)
     if chain:
         chain = enrich_chain_with_greeks(chain, spot_price, "NIFTY")
+        for r in chain:
+            if clean_exp:
+                r["expiry"] = clean_exp
+            if target_ts:
+                r["expiry_timestamp"] = target_ts
 
     signal = build_stock_option_signal(quote, future_quote, chain)
     levels = build_stock_option_levels(quote, chain)
