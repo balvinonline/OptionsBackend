@@ -506,14 +506,7 @@ def normalize_fyers_access_token(client_id, access_token):
     return token
 
 def get_request_fyers_client():
-    """
-    Return the backend's configured FYERS client.
-
-    Market-data credentials are server-owned. Browser FYERS tokens and generic
-    Authorization headers must never replace the shared backend token.
-    """
     global FYERS_CLIENT_ID, fyersModel, fyers, FYERS_ACCESS_TOKEN
-
     if not fyersModel:
         return None
 
@@ -522,12 +515,46 @@ def get_request_fyers_client():
         return None
 
     refresh_fyers_from_env()
-    access_token = normalize_fyers_access_token(
-        client_id,
-        (os.getenv("FYERS_ACCESS_TOKEN", "") or FYERS_ACCESS_TOKEN).strip(),
-    )
-    if not access_token:
-        return None
+
+    # Check request headers for client-provided token
+    req_token = None
+    try:
+        from flask import request, has_request_context
+        if has_request_context():
+            req_token = request.headers.get("x-fyers-token") or request.headers.get("X-Fyers-Token")
+            if not req_token:
+                auth = request.headers.get("Authorization", "")
+                if auth.lower().startswith("bearer "):
+                    possible = auth[7:].strip()
+                    if len(possible) > 80:
+                        req_token = possible
+    except Exception:
+        pass
+
+    clean_req_token = normalize_fyers_access_token(client_id, req_token) if req_token else None
+
+    # If server client is healthy and not cooldown, use it
+    if fyers is not None and time.time() >= _QUOTE_COOLDOWN_UNTIL:
+        return fyers
+
+    # If server client has expired and client passed a valid token, adopt it!
+    if clean_req_token:
+        try:
+            inst = fyersModel.FyersModel(
+                client_id=client_id,
+                is_async=False,
+                token=clean_req_token,
+                log_path=""
+            )
+            configure_fyers_timeout(inst)
+            prof = inst.get_profile() or {}
+            if prof.get("s") == "ok" or prof.get("code") == 200:
+                mark_fyers_token_ready(client_id, clean_req_token)
+                refresh_fyers_from_env(force=True)
+                return inst
+        except Exception:
+            pass
+
     return fyers
 
 def looks_like_raw_fyers_auth_code(value):
@@ -548,24 +575,28 @@ def mark_fyers_token_ready(client_id, access_token):
 
 
 def save_env_value(env_path, key, value):
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    updated = False
-    next_lines = []
+    os.environ[str(key)] = str(value)
+    try:
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        updated = False
+        next_lines = []
 
-    for line in lines:
-        if line.strip().startswith(f"{key}="):
+        for line in lines:
+            if line.strip().startswith(f"{key}="):
+                next_lines.append(f"{key}={value}")
+                updated = True
+            else:
+                next_lines.append(line)
+
+        if not updated:
+            if next_lines and next_lines[-1].strip():
+                next_lines.append("")
             next_lines.append(f"{key}={value}")
-            updated = True
-        else:
-            next_lines.append(line)
 
-    if not updated:
-        if next_lines and next_lines[-1].strip():
-            next_lines.append("")
-        next_lines.append(f"{key}={value}")
-
-    env_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+        env_path.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+    except Exception as exc:
+        print(f"Warning: could not write {key} to {env_path}: {exc}")
 
 
 def extract_fyers_auth_code(value):
