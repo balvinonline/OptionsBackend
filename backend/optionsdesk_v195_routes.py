@@ -10,6 +10,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import tempfile
 import re
 import threading
 import time
@@ -30,6 +31,81 @@ _KOTAK_SESSION_AT = None
 _RECENT_ORDER_IDS = {}
 _DAILY_ORDER_COUNT = {"day": "", "count": 0}
 _IP_CACHE = {"at": 0.0, "value": ""}
+_SESSION_CACHE_FILE = os.path.join(tempfile.gettempdir(), "kotak_session_cache_v2.json")
+
+
+def _sanitize_for_json(obj):
+    """Recursively converts any non-serializable objects (like Exceptions) to strings."""
+    if isinstance(obj, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple, set)):
+        return [_sanitize_for_json(x) for x in obj]
+    elif isinstance(obj, (int, float, bool, str)) or obj is None:
+        return obj
+    elif isinstance(obj, Exception):
+        return str(obj)
+    return str(obj)
+
+
+def _save_kotak_session(client, session_at: str):
+    """Persist Kotak session tokens to disk cache so Gunicorn worker restarts don't lose session."""
+    try:
+        cfg = getattr(client, "configuration", None)
+        if not cfg or not getattr(cfg, "edit_token", None):
+            return
+        data = {
+            "sessionAt": session_at,
+            "edit_token": getattr(cfg, "edit_token", None),
+            "edit_sid": getattr(cfg, "edit_sid", None),
+            "view_token": getattr(cfg, "view_token", None),
+            "bearer_token": getattr(cfg, "bearer_token", None),
+            "sid": getattr(cfg, "sid", None),
+            "ucc": getattr(cfg, "ucc", None),
+            "userId": getattr(cfg, "userId", None),
+            "saved_at": time.time(),
+        }
+        with open(_SESSION_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception as exc:
+        logger.warning(f"Could not save Kotak session tokens to disk: {exc}")
+
+
+def _restore_kotak_session():
+    """Restore active Kotak session from disk if within same trading day."""
+    global _KOTAK_CLIENT, _KOTAK_SESSION_READY, _KOTAK_SESSION_AT
+    if _KOTAK_SESSION_READY and _KOTAK_CLIENT:
+        return True
+    try:
+        if not os.path.exists(_SESSION_CACHE_FILE):
+            return False
+        with open(_SESSION_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        saved_at = data.get("saved_at", 0)
+        if time.time() - saved_at > 16 * 3600:
+            return False
+        edit_token = data.get("edit_token")
+        edit_sid = data.get("edit_sid")
+        if not edit_token or not edit_sid:
+            return False
+
+        client = _new_kotak_client()
+        cfg = client.configuration
+        cfg.edit_token = edit_token
+        cfg.edit_sid = edit_sid
+        cfg.view_token = data.get("view_token")
+        cfg.bearer_token = data.get("bearer_token")
+        cfg.sid = data.get("sid")
+        cfg.ucc = data.get("ucc")
+        cfg.userId = data.get("userId")
+
+        _KOTAK_CLIENT = client
+        _KOTAK_SESSION_READY = True
+        _KOTAK_SESSION_AT = data.get("sessionAt") or datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
+        logger.info(f"Successfully restored Kotak Neo session from persistent cache ({_KOTAK_SESSION_AT})")
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to restore Kotak session from cache: {exc}")
+        return False
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -299,6 +375,7 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None):
         _KOTAK_CLIENT = client
         _KOTAK_SESSION_READY = True
         _KOTAK_SESSION_AT = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
+        _save_kotak_session(client, _KOTAK_SESSION_AT)
         return {
             "sessionAt": _KOTAK_SESSION_AT,
             "loginResp": login_resp,
@@ -495,8 +572,9 @@ def _construct_nse_symbol(underlying: str, expiry: str, strike: float, option_ty
         if contract and contract.get("tradingSymbol"):
             return contract["tradingSymbol"]
 
-        # Algorithmic fallback
+        # Algorithmic construction for all instruments (Stocks and Indices)
         if len(clean_exp) == 9:
+            import calendar
             dd = clean_exp[:2]
             mon = clean_exp[2:5]
             yyyy = clean_exp[5:]
@@ -505,12 +583,25 @@ def _construct_nse_symbol(underlying: str, expiry: str, strike: float, option_ty
                 "JAN": "1", "FEB": "2", "MAR": "3", "APR": "4", "MAY": "5", "JUN": "6",
                 "JUL": "7", "AUG": "8", "SEP": "9", "OCT": "O", "NOV": "N", "DEC": "D"
             }
-            m_code = month_map.get(mon, "1")
             strike_str = str(int(strike) if float(strike).is_integer() else strike)
-            int_dd = int(dd) if dd.isdigit() else 0
-            if int_dd >= 23 or underlying in ["BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
-                return f"{underlying}{yy}{mon}{strike_str}{option_type}"
-            return f"{underlying}{yy}{m_code}{dd}{strike_str}{option_type}"
+            u = str(underlying).strip().upper()
+
+            # Stocks, BANKNIFTY, FINNIFTY, MIDCPNIFTY, BANKEX ALWAYS use 3-letter month (e.g. RELIANCE26NOV1340CE)
+            is_always_monthly = u not in {"NIFTY", "SENSEX"}
+            if is_always_monthly:
+                return f"{u}{yy}{mon}{strike_str}{option_type}"
+
+            # For NIFTY & SENSEX: Last Thursday of month uses 3-letter month (e.g. NIFTY26NOV25250CE); other Thursdays use weekly code
+            months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+            y_int = int(yyyy)
+            m_int = months.index(mon) + 1
+            month_days = calendar.monthrange(y_int, m_int)[1]
+            last_thu = max(d for d in range(month_days - 6, month_days + 1) if calendar.weekday(y_int, m_int, d) == 3)
+            if int(dd) == last_thu:
+                return f"{u}{yy}{mon}{strike_str}{option_type}"
+            else:
+                m_code = month_map.get(mon, "1")
+                return f"{u}{yy}{m_code}{dd}{strike_str}{option_type}"
     except Exception:
         pass
     return ""
@@ -534,20 +625,30 @@ def _get_nearest_expiry(underlying: str) -> str:
     except Exception:
         pass
 
-    # Hardcoded default active expiries (today is Oct 28, 2026):
-    defaults = {
-        "NIFTY": "03-NOV-2026",
-        "SENSEX": "29-OCT-2026",
-        "BANKNIFTY": "23-NOV-2026",
-        "FINNIFTY": "23-NOV-2026",
-        "MIDCPNIFTY": "23-NOV-2026",
-        "BANKEX": "29-OCT-2026"
-    }
-    if u in defaults:
-        return defaults[u]
-
+    import calendar
     from datetime import timedelta
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
+
+    # Stocks: Always expire on the last Thursday of the month
+    if u not in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}:
+        y = now.year
+        m = now.month
+        month_days = calendar.monthrange(y, m)[1]
+        last_thu = max(d for d in range(month_days - 6, month_days + 1) if calendar.weekday(y, m, d) == 3)
+        if now.day > last_thu or (now.day == last_thu and (now.hour > 15 or (now.hour == 15 and now.minute >= 30))):
+            m = 1 if m == 12 else m + 1
+            y = y + 1 if m == 1 else y
+            month_days = calendar.monthrange(y, m)[1]
+            last_thu = max(d for d in range(month_days - 6, month_days + 1) if calendar.weekday(y, m, d) == 3)
+        months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+        return f"{last_thu:02d}-{months[m - 1]}-{y}"
+
+    # Indices:
+    # MIDCPNIFTY, BANKEX: Monday (0)
+    # FINNIFTY: Tuesday (1)
+    # BANKNIFTY: Wednesday (2)
+    # NIFTY: Thursday (3)
+    # SENSEX: Thursday (3)
     target_weekday = 0 if u in ["MIDCPNIFTY", "BANKEX"] else (
         1 if u == "FINNIFTY" else (
             2 if u == "BANKNIFTY" else 3
@@ -1103,7 +1204,7 @@ def register_optionsdesk_v195_routes(app):
             if err_val or (stat and stat not in {"ok", "success"}):
                 _RECENT_ORDER_IDS.pop(client_order_id, None)
                 err_msg = str(err_val or resp_dict.get("message") or "Kotak Neo rejected the order")
-                return jsonify({"ok": False, "error": err_msg, "data": resp_dict}), 400
+                return jsonify({"ok": False, "error": err_msg, "data": _sanitize_for_json(resp_dict)}), 400
 
             order_no = resp_dict.get("nOrdNo") or resp_dict.get("orderId") or client_order_id
             _DAILY_ORDER_COUNT["count"] += 1
@@ -1112,7 +1213,7 @@ def register_optionsdesk_v195_routes(app):
                 "message": f"Live order accepted by Kotak Neo (Order #{order_no})",
                 "orderNumber": str(order_no),
                 "tradingSymbol": trading_symbol,
-                "data": resp_dict,
+                "data": _sanitize_for_json(resp_dict),
             })
         except Exception as exc:
             _RECENT_ORDER_IDS.pop(client_order_id, None)

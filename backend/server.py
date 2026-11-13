@@ -3022,21 +3022,33 @@ def detect_option_side(item, ce_obj, pe_obj):
     if pe_obj:
         return "PE"
 
-    text_parts = [
-        str(item.get("option_type", "")),
-        str(item.get("type", "")),
-        str(item.get("side", "")),
-        str(item.get("instrumentType", "")),
-        str(item.get("instrument_type", "")),
-        str(item.get("symbol", "")),
-        str(item.get("name", "")),
-    ]
-    text = " ".join(text_parts).upper()
+    opt_type = str(
+        item.get("option_type")
+        or item.get("optionType")
+        or item.get("instrument_type")
+        or item.get("instrumentType")
+        or item.get("side")
+        or item.get("type")
+        or ""
+    ).strip().upper()
 
-    if "CE" in text or "CALL" in text:
+    if opt_type in ("CE", "CALL"):
         return "CE"
-    if "PE" in text or "PUT" in text:
+    if opt_type in ("PE", "PUT"):
         return "PE"
+
+    sym = str(item.get("symbol") or item.get("fySymbol") or item.get("name") or "").strip().upper()
+    if re.search(r"(CE|CALL)$", sym):
+        return "CE"
+    if re.search(r"(PE|PUT)$", sym):
+        return "PE"
+
+    text = f" {sym} {opt_type} ".upper()
+    if re.search(r"\b(CE|CALL)\b", text):
+        return "CE"
+    if re.search(r"\b(PE|PUT)\b", text):
+        return "PE"
+
     return None
 
 
@@ -6351,13 +6363,69 @@ def get_active_future_suffix():
     return f"{str(contract_year)[-2:]}{month_code}FUT"
 
 
-def equity_to_stock_future_symbol(symbol):
+def get_stock_monthly_expiries():
+    now = datetime.now()
+    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+    results = []
+    cur_y = now.year
+    cur_m = now.month
+
+    for i in range(3):
+        m = cur_m + i
+        y = cur_y
+        if m > 12:
+            m -= 12
+            y += 1
+        import calendar
+        num_days = calendar.monthrange(y, m)[1]
+        exp_day = 28
+        for d in range(num_days, 20, -1):
+            if datetime(y, m, d).weekday() == 1:  # Tuesday in 2026 schedule
+                exp_day = d
+                break
+        results.append(f"{exp_day:02d}-{months[m-1]}-{y}")
+    return results
+
+
+def equity_to_stock_future_symbol(symbol, expiry=None):
     text = str(symbol or "").strip().upper()
     if not text:
         return ""
     if text.startswith("NSE:"):
         text = text[4:]
     base = text.replace("-EQ", "")
+
+    if expiry and str(expiry).strip().upper() not in ("CURRENT", "DEFAULT", "ALL"):
+        clean = str(expiry).strip().upper().replace("/", "-")
+        months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+        month_found = None
+        year_found = None
+
+        for m in months:
+            if m in clean:
+                month_found = m
+                break
+
+        parts = clean.split("-")
+        for p in parts:
+            if p.isdigit() and len(p) == 4 and 2024 <= int(p) <= 2035:
+                year_found = int(p)
+                break
+        if not year_found:
+            for p in parts:
+                if p.isdigit() and len(p) == 2 and 24 <= int(p) <= 35 and int(p) != 31:
+                    year_found = 2000 + int(p)
+                    break
+        if not month_found:
+            for p in parts:
+                if p.isdigit() and 1 <= int(p) <= 12 and int(p) != (year_found % 100 if year_found else -1):
+                    month_found = months[int(p) - 1]
+                    break
+
+        if month_found:
+            yr_str = str(year_found)[-2:] if year_found else str(datetime.now().year)[-2:]
+            return f"NSE:{base}{yr_str}{month_found}FUT"
+
     return f"NSE:{base}{get_active_future_suffix()}"
 
 
@@ -6934,16 +7002,21 @@ def build_stock_option_levels(quote, chain):
     }
 
 
-def build_stock_options_detail(symbol, cache_ttl=8):
+def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
     stock_symbol = normalize_stock_option_symbol(symbol)
     if not stock_symbol:
         return {"error": "Stock symbol is required", "symbol": symbol}
-    cache_key = stock_symbol
+    clean_exp = str(expiry or "").strip().upper()
+    cache_key = f"{stock_symbol}_{clean_exp or 'default'}"
     cached = get_cached("stock_options_detail", key=cache_key, ttl=cache_ttl)
     if cached is not None:
         return cached
 
-    future_symbol = equity_to_stock_future_symbol(stock_symbol)
+    monthly_expiries = get_stock_monthly_expiries()
+    if not clean_exp or clean_exp in ("CURRENT", "DEFAULT", "ALL"):
+        clean_exp = monthly_expiries[0] if monthly_expiries else ""
+
+    future_symbol = equity_to_stock_future_symbol(stock_symbol, expiry=clean_exp)
     quotes = get_quotes_map([stock_symbol, future_symbol], chunk_size=2, fallback_missing=True)
     raw_quote = quotes.get(stock_symbol) or quotes.get(normalize_symbol_key(stock_symbol)) or {}
     raw_future = quotes.get(future_symbol) or quotes.get(normalize_symbol_key(future_symbol)) or {}
@@ -6959,23 +7032,52 @@ def build_stock_options_detail(symbol, cache_ttl=8):
             future_quote["oiChange"] = cached_oi_data.get("oi") - cached_oi_data.get("pdoi")
 
     spot_price = safe_float(quote.get("ltp"), None)
-    raw_chain = get_option_chain_raw([stock_symbol, future_symbol], future_symbol, strikecount=24)
+
+    # Resolve authentic expiry timestamp from Fyers metadata if specific expiry requested
+    expiry_ts = None
+    if clean_exp and clean_exp not in ("CURRENT", "DEFAULT", "ALL"):
+        try:
+            import datetime as dt_mod
+            parts = clean_exp.replace("/", "-").split("-")
+            months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+            if len(parts) == 3:
+                d = int(parts[0])
+                m = months.index(parts[1][:3].upper()) + 1 if parts[1][:3].upper() in months else int(parts[1])
+                y = int(parts[2])
+                target_dt = dt_mod.datetime(y, m, d, 15, 30, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+                expiry_ts = int(target_dt.timestamp())
+        except Exception as e:
+            logger.warning(f"Failed to convert expiry '{clean_exp}' to timestamp: {e}")
+
+    raw_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24, expiry_timestamp=expiry_ts)
     chain = parse_option_chain(raw_chain, spot_price)
     if chain:
         chain = enrich_chain_with_greeks(chain, spot_price, "NIFTY")
+
+    # Extract authentic expiries from Fyers response
+    expiries_list = []
+    raw_exp_data = raw_chain.get("expiryData") or (raw_chain.get("data", {}) if isinstance(raw_chain.get("data"), dict) else {}).get("expiryData") or []
+    if isinstance(raw_exp_data, list):
+        for item in raw_exp_data:
+            if isinstance(item, dict) and item.get("date"):
+                expiries_list.append(str(item["date"]).upper())
+
     signal = build_stock_option_signal(quote, future_quote, chain)
     levels = build_stock_option_levels(quote, chain)
     max_pain = compute_max_pain(chain)
 
+    final_expiries = expiries_list if expiries_list else monthly_expiries
     result = {
         "symbol": stock_symbol.replace("NSE:", "").replace("-EQ", ""),
         "fyersSymbol": stock_symbol,
         "futureSymbol": future_symbol,
+        "selectedExpiry": clean_exp,
         "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
         "quote": quote,
         "future": future_quote,
         "spot": {"ltp": quote.get("ltp"), "change": quote.get("change"), "change_pct": quote.get("change_pct"), "vwap": quote.get("vwap")},
         "optionChain": chain,
+        "expiries": final_expiries,
         "signal": signal,
         "levels": levels,
         "max_pain": max_pain,
@@ -8972,8 +9074,9 @@ def stock_options_scan():
 @app.route("/api/stock-options")
 def stock_options_detail():
     symbol = request.args.get("symbol", "").strip()
+    expiry = request.args.get("expiry", "").strip()
     try:
-        return jsonify(build_stock_options_detail(symbol))
+        return jsonify(build_stock_options_detail(symbol, expiry=expiry))
     except Exception as e:
         print("stock-options detail error:", e)
         return jsonify({
