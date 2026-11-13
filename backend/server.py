@@ -7033,24 +7033,11 @@ def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
 
     spot_price = safe_float(quote.get("ltp"), None)
 
-    # Resolve authentic expiry timestamp from Fyers metadata if specific expiry requested
-    expiry_ts = None
-    if clean_exp and clean_exp not in ("CURRENT", "DEFAULT", "ALL"):
-        try:
-            from zoneinfo import ZoneInfo
-            import datetime as dt_mod
-            parts = clean_exp.replace("/", "-").split("-")
-            months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
-            if len(parts) == 3:
-                d = int(parts[0])
-                m = months.index(parts[1][:3].upper()) + 1 if parts[1][:3].upper() in months else int(parts[1])
-                y = int(parts[2])
-                target_dt = dt_mod.datetime(y, m, d, 15, 30, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
-                expiry_ts = int(target_dt.timestamp())
-        except Exception as e:
-            print(f"Failed to convert expiry '{clean_exp}' to timestamp: {e}")
-
-    raw_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24, expiry_timestamp=expiry_ts)
+    # For stock options, each monthly contract has its own unique futures symbol
+    # (e.g. NSE:RELIANCE26NOVFUT, NSE:RELIANCE26DECFUT, NSE:RELIANCE27JANFUT) which
+    # uniquely maps the expiry month. Fyers optionchain accepts the future symbol directly
+    # without a timestamp parameter.
+    raw_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24)
     chain = parse_option_chain(raw_chain, spot_price)
     if chain:
         chain = enrich_chain_with_greeks(chain, spot_price, "NIFTY")
