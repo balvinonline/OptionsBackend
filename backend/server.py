@@ -7064,22 +7064,38 @@ def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
 
     spot_price = safe_float(quote.get("ltp"), None)
 
-    # For stock options, each monthly contract has its own unique futures symbol
-    # (e.g. NSE:RELIANCE26NOVFUT, NSE:RELIANCE26DECFUT, NSE:RELIANCE27JANFUT) which
-    # uniquely maps the expiry month. Fyers optionchain accepts the future symbol directly
-    # without a timestamp parameter.
+    # For stock options, fetch initial option chain to inspect authentic Fyers expiryData
     raw_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24)
-    chain = parse_option_chain(raw_chain, spot_price)
-    if chain:
-        chain = enrich_chain_with_greeks(chain, spot_price, "NIFTY")
+    data = raw_chain.get("data", raw_chain) if isinstance(raw_chain, dict) else {}
+    raw_exp_data = data.get("expiryData", []) if isinstance(data, dict) else []
 
-    # Extract authentic expiries from Fyers response
+    # Extract authentic expiries from Fyers response and find target timestamp for requested expiry
     expiries_list = []
-    raw_exp_data = raw_chain.get("expiryData") or (raw_chain.get("data", {}) if isinstance(raw_chain.get("data"), dict) else {}).get("expiryData") or []
+    target_ts = None
     if isinstance(raw_exp_data, list):
         for item in raw_exp_data:
             if isinstance(item, dict) and item.get("date"):
-                expiries_list.append(str(item["date"]).upper())
+                d_str = str(item["date"]).upper()
+                expiries_list.append(d_str)
+                ts = str(item.get("expiry") or item.get("timestamp") or "").strip()
+                if clean_exp and ts:
+                    # Match exact string or date components (e.g., 29-12-2026 vs 29-DEC-2026)
+                    c_norm = clean_exp.replace("DEC", "12").replace("NOV", "11").replace("JAN", "01").replace("FEB", "02").replace("MAR", "03")
+                    d_norm = d_str.replace("DEC", "12").replace("NOV", "11").replace("JAN", "01").replace("FEB", "02").replace("MAR", "03")
+                    if c_norm == d_norm or clean_exp in d_str or d_str in clean_exp:
+                        target_ts = ts
+
+    # If the user requested a specific expiry (e.g. December or January) and target_ts is not the first expiry,
+    # fetch the exact option chain for that expiry using Fyers's authentic timestamp!
+    if target_ts:
+        rows_now = _extract_option_rows_from_data(data)
+        first_row_ts = str(rows_now[0].get("expiry_timestamp") or rows_now[0].get("expiry") or "").strip() if rows_now else ""
+        if first_row_ts and first_row_ts != target_ts:
+            raw_chain = get_option_chain_raw([future_symbol, stock_symbol], future_symbol, strikecount=24, expiry_timestamp=target_ts)
+
+    chain = parse_option_chain(raw_chain, spot_price)
+    if chain:
+        chain = enrich_chain_with_greeks(chain, spot_price, "NIFTY")
 
     signal = build_stock_option_signal(quote, future_quote, chain)
     levels = build_stock_option_levels(quote, chain)
