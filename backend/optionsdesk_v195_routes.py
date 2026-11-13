@@ -14,9 +14,15 @@ import tempfile
 import re
 import threading
 import time
-from datetime import datetime, date
-from zoneinfo import ZoneInfo
+from datetime import datetime, date, timezone, timedelta
 from functools import wraps
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _ist_now() -> datetime:
+    """Bulletproof IST datetime that never fails regardless of OS tzdata packages."""
+    return datetime.now(IST)
 
 import requests
 from flask import jsonify, request
@@ -117,7 +123,7 @@ def _restore_kotak_session():
 
         _KOTAK_CLIENT = client
         _KOTAK_SESSION_READY = True
-        _KOTAK_SESSION_AT = data.get("sessionAt") or datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
+        _KOTAK_SESSION_AT = data.get("sessionAt") or _ist_now().isoformat(timespec="seconds")
         logger.info(f"Successfully restored Kotak Neo session from persistent cache ({_KOTAK_SESSION_AT})")
         return True
     except Exception as exc:
@@ -398,7 +404,7 @@ def _perform_kotak_login(totp: str | None = None, mpin: str | None = None, consu
 
         _KOTAK_CLIENT = client
         _KOTAK_SESSION_READY = True
-        _KOTAK_SESSION_AT = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
+        _KOTAK_SESSION_AT = _ist_now().isoformat(timespec="seconds")
         _save_kotak_session(client, _KOTAK_SESSION_AT)
         cfg = getattr(client, "configuration", None)
         session_data = {
@@ -475,7 +481,7 @@ _KOTAK_SCRIP_LOCK = threading.Lock()
 def _ensure_kotak_scrip_master():
     """Cache daily Kotak Neo official scrip master for 100% verified exchange trading symbols."""
     global _KOTAK_SCRIP_MASTER
-    today = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+    today = _ist_now().strftime("%Y-%m-%d")
     if _KOTAK_SCRIP_MASTER["date"] == today and _KOTAK_SCRIP_MASTER["scrips"]:
         return _KOTAK_SCRIP_MASTER
 
@@ -665,7 +671,7 @@ def _get_nearest_expiry(underlying: str) -> str:
 
     import calendar
     from datetime import timedelta
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    now = _ist_now()
 
     # Stocks: Always expire on the last Thursday of the month
     if u not in {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}:
@@ -740,7 +746,7 @@ def _resolve_kotak_contract(client, payload):
 
 
 def _market_open_now():
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    now = _ist_now()
     if now.weekday() >= 5:
         return False
     hhmm = now.hour * 60 + now.minute
@@ -753,7 +759,7 @@ def _check_order_limits(quantity, reference_price):
         raise ValueError(f"Quantity must be between 1 and {config['maxOrderQty']}")
     if reference_price and quantity * reference_price > config["maxOrderValue"]:
         raise ValueError(f"Order value exceeds backend limit of {config['maxOrderValue']:.0f}")
-    day = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+    day = _ist_now().strftime("%Y-%m-%d")
     if _DAILY_ORDER_COUNT["day"] != day:
         _DAILY_ORDER_COUNT.update({"day": day, "count": 0})
     if _DAILY_ORDER_COUNT["count"] >= config["maxOrdersPerDay"]:
@@ -763,7 +769,7 @@ def _check_order_limits(quantity, reference_price):
 
 def _build_index_expiries(underlying: str, count: int = 4) -> list[str]:
     from datetime import timedelta
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    now = _ist_now()
     u = str(underlying or "NIFTY").upper()
     target_weekday = 0 if u in ["MIDCPNIFTY", "BANKEX"] else (
         1 if u == "FINNIFTY" else (
@@ -1125,7 +1131,7 @@ def register_optionsdesk_v195_routes(app):
 
             _KOTAK_CLIENT = client
             _KOTAK_SESSION_READY = True
-            _KOTAK_SESSION_AT = session_data.get("sessionAt") or datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
+            _KOTAK_SESSION_AT = session_data.get("sessionAt") or _ist_now().isoformat(timespec="seconds")
             _save_kotak_session(client, _KOTAK_SESSION_AT)
             logger.info(f"Successfully resumed Kotak Neo session via resume-session endpoint ({_KOTAK_SESSION_AT})")
             return jsonify({"ok": True, "sessionReady": True, "sessionAt": _KOTAK_SESSION_AT, "message": "Kotak Neo session resumed successfully"})
@@ -1200,8 +1206,8 @@ def register_optionsdesk_v195_routes(app):
             return None, None, None
 
         for attempt in range(3):
-            # Allow Kotak RMS 350ms on first attempt, then 400ms on subsequent attempts
-            time.sleep(0.35 if attempt == 0 else 0.40)
+            # Fast RMS check: 200ms on first attempt, then 250ms on subsequent attempts
+            time.sleep(0.20 if attempt == 0 else 0.25)
             try:
                 # 1. Try order_history (gives status timeline for the order)
                 with _KOTAK_LOCK:
@@ -1220,7 +1226,7 @@ def register_optionsdesk_v195_routes(app):
                 for r in reversed(rows):
                     if isinstance(r, dict) and r:
                         ord_st = str(r.get("ordSt") or r.get("status") or "").strip().lower()
-                        rej_rsn = str(r.get("rejRsn") or r.get("errMsg") or r.get("text") or "").strip()
+                        rej_rsn = str(r.get("rejLongDesc") or r.get("rejRsn") or r.get("errMsg") or r.get("text") or "").strip()
                         if rej_rsn in {"--", "NA", "None", "null"}:
                             rej_rsn = ""
                         if ord_st in {"rejected", "cancelled", "canc"} or rej_rsn:
@@ -1249,7 +1255,7 @@ def register_optionsdesk_v195_routes(app):
                     for r in reversed(rep_rows):
                         if isinstance(r, dict) and r:
                             ord_st = str(r.get("ordSt") or r.get("status") or "").strip().lower()
-                            rej_rsn = str(r.get("rejRsn") or r.get("errMsg") or r.get("text") or "").strip()
+                            rej_rsn = str(r.get("rejLongDesc") or r.get("rejRsn") or r.get("errMsg") or r.get("text") or "").strip()
                             if rej_rsn in {"--", "NA", "None", "null"}:
                                 rej_rsn = ""
                             if ord_st in {"rejected", "cancelled", "canc"} or rej_rsn:
@@ -1270,40 +1276,41 @@ def register_optionsdesk_v195_routes(app):
     @_require_mobile_auth
     def kotakneo_order():
         global _DAILY_ORDER_COUNT
-        config = _kotak_config()
-        if not config["liveTradingEnabled"]:
-            return jsonify({"ok": False, "error": "Live trading kill switch is OFF"}), 403
-        if not config["staticIpReady"]:
-            return jsonify({"ok": False, "error": "Static IP check failed"}), 409
-
-        # Auto-reconnect if session expired but auto-TOTP is available
-        if (not config["sessionReady"] or _KOTAK_CLIENT is None) and config["autoTotpConfigured"]:
-            try:
-                _perform_kotak_login()
-                config = _kotak_config()
-            except Exception as exc:
-                return jsonify({"ok": False, "error": f"Kotak session auto-reconnect failed: {exc}"}), 401
-
-        if not config["sessionReady"] or _KOTAK_CLIENT is None:
-            return jsonify({"ok": False, "error": "Kotak Neo trading session is not connected"}), 401
-
-        body = request.get_json(silent=True) or {}
-        is_amo = str(body.get("amo") or "").upper() == "YES" or not _market_open_now()
-        if not _market_open_now() and not _env_bool("OPTIONSDESK_ALLOW_AMO", True) and not is_amo:
-            return jsonify({"ok": False, "error": "Live orders outside regular market hours must be confirmed as AMO"}), 409
-        if body.get("confirmLive") is not True:
-            return jsonify({"ok": False, "error": "Explicit live-order confirmation is required"}), 400
-        client_order_id = str(body.get("clientOrderId") or "").strip()
-        if not client_order_id:
-            return jsonify({"ok": False, "error": "clientOrderId is required"}), 400
-        now = time.time()
-        for key, created in list(_RECENT_ORDER_IDS.items()):
-            if now - created > 900:
-                _RECENT_ORDER_IDS.pop(key, None)
-        if client_order_id in _RECENT_ORDER_IDS:
-            return jsonify({"ok": False, "error": "Duplicate order blocked"}), 409
-
+        client_order_id = ""
         try:
+            config = _kotak_config()
+            if not config["liveTradingEnabled"]:
+                return jsonify({"ok": False, "error": "Live trading kill switch is OFF"}), 403
+            if not config["staticIpReady"]:
+                return jsonify({"ok": False, "error": "Static IP check failed"}), 409
+
+            # Auto-reconnect if session expired but auto-TOTP is available
+            if (not config["sessionReady"] or _KOTAK_CLIENT is None) and config["autoTotpConfigured"]:
+                try:
+                    _perform_kotak_login()
+                    config = _kotak_config()
+                except Exception as exc:
+                    return jsonify({"ok": False, "error": f"Kotak session auto-reconnect failed: {exc}"}), 401
+
+            if not config["sessionReady"] or _KOTAK_CLIENT is None:
+                return jsonify({"ok": False, "error": "Kotak Neo trading session is not connected"}), 401
+
+            body = request.get_json(silent=True) or {}
+            is_amo = str(body.get("amo") or "").upper() == "YES" or not _market_open_now()
+            if not _market_open_now() and not _env_bool("OPTIONSDESK_ALLOW_AMO", True) and not is_amo:
+                return jsonify({"ok": False, "error": "Live orders outside regular market hours must be confirmed as AMO"}), 409
+            if body.get("confirmLive") is not True:
+                return jsonify({"ok": False, "error": "Explicit live-order confirmation is required"}), 400
+            client_order_id = str(body.get("clientOrderId") or "").strip()
+            if not client_order_id:
+                return jsonify({"ok": False, "error": "clientOrderId is required"}), 400
+            now = time.time()
+            for key, created in list(_RECENT_ORDER_IDS.items()):
+                if now - created > 900:
+                    _RECENT_ORDER_IDS.pop(key, None)
+            if client_order_id in _RECENT_ORDER_IDS:
+                return jsonify({"ok": False, "error": "Duplicate order blocked"}), 409
+
             quantity = int(body.get("quantity") or 0)
             reference_price = _as_float(body.get("referencePrice")) or _as_float(body.get("price")) or 0
             _check_order_limits(quantity, reference_price)
@@ -1463,11 +1470,14 @@ def register_optionsdesk_v195_routes(app):
                 "status": "SUCCESS",
                 "message": f"Live order accepted by Kotak Neo (Order #{order_no})",
                 "orderNumber": str(order_no),
+                "orderId": str(order_no),
                 "tradingSymbol": trading_symbol,
                 "data": _sanitize_for_json(resp_dict),
             })
         except Exception as exc:
-            _RECENT_ORDER_IDS.pop(client_order_id, None)
+            if client_order_id:
+                _RECENT_ORDER_IDS.pop(client_order_id, None)
+            logger.exception("Error in kotakneo_order: %s", exc)
             return jsonify({"ok": False, "error": str(exc)}), 400
 
     @app.route("/api/kotakneo/positions", methods=["GET"])
