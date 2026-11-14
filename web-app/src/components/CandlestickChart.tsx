@@ -13,6 +13,7 @@ export const CandlestickChart = ({ fullScreen = false }: { fullScreen?: boolean 
   const ema9SeriesRef = useRef<any>(null);
   const ema21SeriesRef = useRef<any>(null);
   const supportResistanceLinesRef = useRef<any[]>([]);
+  const liveCandleRef = useRef<any>(null);
   
   const { indexCandles, marketData, selectedIndex, chartResolution, setChartResolution } = useMarket();
 
@@ -98,9 +99,9 @@ export const CandlestickChart = ({ fullScreen = false }: { fullScreen?: boolean 
     // Convert to lightweight-charts format
     const displayCandles = fullScreen ? indexCandles : indexCandles.slice(-120);
     const formattedData = displayCandles.map((c: any) => {
-      let timeVal = c.ts > 10000000000 ? Math.floor(c.ts / 1000) : c.ts;
+      const timeVal = c.ts > 10000000000 ? Math.floor(c.ts / 1000) : c.ts;
       return {
-        time: (timeVal + 19800) as Time, // +5:30 offset in seconds for IST
+        time: timeVal as Time,
         open: Number(c.open),
         high: Number(c.high),
         low: Number(c.low),
@@ -149,27 +150,78 @@ export const CandlestickChart = ({ fullScreen = false }: { fullScreen?: boolean 
       });
     });
 
-    chartRef.current?.timeScale().fitContent();
+    liveCandleRef.current = null;
+    if (uniqueData.length) {
+      const last = uniqueData[uniqueData.length - 1];
+      liveCandleRef.current = { ...last };
+    }
+    // Preserve the user's current viewport during periodic history refreshes.
+    if (uniqueData.length && !chartRef.current?.timeScale().getVisibleLogicalRange()) {
+      chartRef.current?.timeScale().fitContent();
+    }
   }, [indexCandles]);
 
-  // Update live tick (latest incomplete candle)
+  // Aggregate each live spot tick into its actual timeframe bucket.
   useEffect(() => {
-    if (!seriesRef.current || !indexCandles || indexCandles.length === 0 || !marketData?.spot) return;
+    if (!seriesRef.current || !marketData?.spot) return;
 
-    const lastCandle = indexCandles[indexCandles.length - 1];
-    let timeVal = lastCandle.ts > 10000000000 ? Math.floor(lastCandle.ts / 1000) : lastCandle.ts;
-    const currentSpot = typeof marketData.spot === 'object' ? Number(marketData.spot?.ltp || 0) : Number(marketData.spot);
+    const currentSpot = typeof marketData.spot === 'object'
+      ? Number(marketData.spot?.ltp || 0)
+      : Number(marketData.spot);
+    if (!Number.isFinite(currentSpot) || currentSpot <= 0) return;
 
-    if (!isNaN(currentSpot) && currentSpot > 0) {
-      seriesRef.current.update({
-        time: (timeVal + 19800) as Time,
-        open: Number(lastCandle.open),
-        high: Math.max(Number(lastCandle.high), currentSpot),
-        low: Math.min(Number(lastCandle.low), currentSpot),
-        close: currentSpot,
-      } as any);
+    // tickTimestamp is the backend's WebSocket receipt time (milliseconds).
+    // It is used as a fallback clock, not represented as an exchange timestamp.
+    const tickMs = Number(marketData.tickTimestamp) || Date.now();
+    const intervalMinutes = chartResolution === 'D' ? 1440 : Math.max(1, Number(chartResolution) || 5);
+    const istOffsetSeconds = 19800;
+    const tickSeconds = Math.floor(tickMs / 1000);
+    const istSeconds = tickSeconds + istOffsetSeconds;
+    let bucketSeconds;
+
+    if (chartResolution === 'D') {
+      const istDate = new Date(istSeconds * 1000);
+      istDate.setUTCHours(0, 0, 0, 0);
+      bucketSeconds = Math.floor(istDate.getTime() / 1000) - istOffsetSeconds;
+    } else {
+      const intervalSeconds = intervalMinutes * 60;
+      // Intraday bars are anchored to the 09:15 IST exchange session open.
+      const sessionAnchor = Math.floor(istSeconds / 86400) * 86400 + (9 * 60 + 15) * 60;
+      bucketSeconds = sessionAnchor + Math.floor((istSeconds - sessionAnchor) / intervalSeconds) * intervalSeconds - istOffsetSeconds;
     }
-  }, [marketData?.spot]);
+
+    const lastHistorical = indexCandles?.length ? indexCandles[indexCandles.length - 1] : null;
+    const lastHistoricalTime = lastHistorical
+      ? (lastHistorical.ts > 10000000000 ? Math.floor(lastHistorical.ts / 1000) : Number(lastHistorical.ts))
+      : null;
+    const current = liveCandleRef.current;
+
+    if (current && Number(current.time) === bucketSeconds) {
+      current.high = Math.max(Number(current.high), currentSpot);
+      current.low = Math.min(Number(current.low), currentSpot);
+      current.close = currentSpot;
+    } else if (lastHistoricalTime === bucketSeconds && lastHistorical) {
+      liveCandleRef.current = {
+        time: bucketSeconds,
+        open: Number(lastHistorical.open),
+        high: Math.max(Number(lastHistorical.high), currentSpot),
+        low: Math.min(Number(lastHistorical.low), currentSpot),
+        close: currentSpot,
+      };
+    } else if (lastHistoricalTime === null || bucketSeconds > lastHistoricalTime) {
+      liveCandleRef.current = {
+        time: bucketSeconds,
+        open: currentSpot,
+        high: currentSpot,
+        low: currentSpot,
+        close: currentSpot,
+      };
+    } else {
+      return;
+    }
+
+    seriesRef.current.update({ ...liveCandleRef.current, time: bucketSeconds as Time } as any);
+  }, [marketData?.spot, marketData?.tickTimestamp, chartResolution, indexCandles]);
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 shadow-lg flex flex-col h-[500px]">
