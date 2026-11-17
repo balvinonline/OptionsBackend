@@ -17,4 +17,4 @@ COPY . .
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "server:app", "--workers", "2", "--threads", "4", "--timeout", "120"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "server:app", "--workers", "1", "--threads", "35", "--timeout", "60"]

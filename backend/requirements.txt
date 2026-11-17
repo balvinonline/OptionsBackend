@@ -10,7 +10,6 @@ eventlet
 gevent
 gevent-websocket
 pytz
-scipy
 simple-websocket
 httpx[http2]
 PyJWT

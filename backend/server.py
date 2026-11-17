@@ -1693,29 +1693,55 @@ DEBUG_LOGS = False
 # =========================================================
 # CACHE HELPERS
 # =========================================================
+CACHE_MAX_KEYS = {
+    "dashboard": 16,
+    "fyers_history": 30,
+    "market_news": 5,
+}
+_CACHE_LOCK = threading.RLock()
+
+
 def get_cached(bucket, key=None, ttl=5):
     now = time.time()
+    with _CACHE_LOCK:
+        if key is None:
+            item = _CACHE.get(bucket, {})
+        else:
+            b = _CACHE.get(bucket)
+            if not isinstance(b, dict):
+                return None
+            item = b.get(key)
+            if not item:
+                return None
+            if (now - item.get("ts", 0)) < ttl:
+                return item.get("data")
+            # Prune expired key to reclaim memory
+            b.pop(key, None)
+            return None
 
-    if key is None:
-        item = _CACHE.get(bucket, {})
-    else:
-        item = (_CACHE.get(bucket, {}) or {}).get(key, {})
+        if item and (now - item.get("ts", 0)) < ttl:
+            return item.get("data")
 
-    if item and (now - item.get("ts", 0)) < ttl:
-        return item.get("data")
-
-    return None
+        return None
 
 
 def set_cached(bucket, data, key=None):
     now = time.time()
-
-    if key is None:
-        _CACHE[bucket] = {"ts": now, "data": data}
-    else:
-        if bucket not in _CACHE:
-            _CACHE[bucket] = {}
-        _CACHE[bucket][key] = {"ts": now, "data": data}
+    with _CACHE_LOCK:
+        if key is None:
+            _CACHE[bucket] = {"ts": now, "data": data}
+        else:
+            if bucket not in _CACHE or not isinstance(_CACHE[bucket], dict):
+                _CACHE[bucket] = {}
+            b = _CACHE[bucket]
+            max_limit = CACHE_MAX_KEYS.get(bucket, 30)
+            if len(b) >= max_limit and key not in b:
+                try:
+                    oldest_k = min(b.keys(), key=lambda k: (b[k] or {}).get("ts", 0))
+                    b.pop(oldest_k, None)
+                except Exception:
+                    pass
+            b[key] = {"ts": now, "data": data}
 
 
 # =========================================================
@@ -2300,7 +2326,6 @@ def normalize_ws_messages(message):
         "vwap": vwap,
         "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
         "ts": int(time.time() * 1000),
-        "raw": message,
     }]
 
 
@@ -2472,7 +2497,7 @@ def ensure_fyers_ws_stream(symbols):
         try:
             _FYERS_WS_SOCKET = data_ws.FyersDataSocket(
                 access_token=token,
-                write_to_file=True,
+                write_to_file=False,
                 litemode=True,
                 reconnect=True,
                 on_message=on_fyers_ws_message,
