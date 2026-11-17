@@ -460,12 +460,12 @@ def _clean_expiry(value) -> str:
             except Exception:
                 pass
 
-    try:
-        import pandas as pd
-        dt = pd.to_datetime(s)
-        return dt.strftime("%d%b%Y").upper()
-    except Exception:
-        pass
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d%b%Y", "%d-%b-%Y", "%d-%b-%y", "%d%b%y", "%Y%m%d"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.strftime("%d%b%Y").upper()
+        except ValueError:
+            pass
 
     return s.replace("-", "").replace("/", "")
 

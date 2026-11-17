@@ -1,5 +1,20 @@
 import math
-from scipy.stats import norm
+
+class PureNorm:
+    SQRT2 = math.sqrt(2.0)
+    INV_SQRT_2PI = 1.0 / math.sqrt(2.0 * math.pi)
+
+    @staticmethod
+    def cdf(x):
+        return 0.5 * (1.0 + math.erf(x / PureNorm.SQRT2))
+
+    @staticmethod
+    def pdf(x):
+        if abs(x) > 38.0:
+            return 0.0
+        return PureNorm.INV_SQRT_2PI * math.exp(-0.5 * x * x)
+
+norm = PureNorm()
 
 # Risk-free interest rate (e.g. 7% for India)
 RISK_FREE_RATE = 0.07
@@ -38,7 +53,7 @@ def calculate_greeks(S, K, T, r, sigma, option_type='CE'):
     Returns Delta, Theta, and Gamma.
     Theta is returned as decay per day.
     """
-    if T <= 0 or sigma <= 0:
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
         return {"delta": 0, "theta": 0, "gamma": 0}
         
     d1, d2 = calculate_d1_d2(S, K, T, r, sigma)
