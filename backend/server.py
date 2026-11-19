@@ -14,6 +14,8 @@ import xml.etree.ElementTree as ET
 import socket
 import sqlite3
 import secrets
+import hmac
+from functools import wraps
 import werkzeug.security
 import gc
 import math
@@ -71,8 +73,95 @@ load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 dist_folder = Path(__file__).resolve().parent.parent / "dist"
 app = Flask(__name__, static_folder=str(dist_folder), static_url_path='/')
-app.config["SECRET_KEY"] = "super-secret-dashboard-key"
-CORS(app)
+flask_secret = os.getenv("FLASK_SECRET_KEY", "").strip()
+is_production = (
+    os.getenv("RENDER", "").lower() in {"true", "1"} or
+    os.getenv("FLASK_ENV") == "production"
+)
+
+if not flask_secret:
+    if is_production:
+        raise RuntimeError(
+            "FATAL: FLASK_SECRET_KEY environment variable is not configured. "
+            "Refusing to start production backend with missing session secret."
+        )
+    else:
+        flask_secret = secrets.token_hex(32)
+        print("⚠️ Warning: FLASK_SECRET_KEY not set. Using ephemeral development key.")
+
+app.config["SECRET_KEY"] = flask_secret
+
+ALLOWED_ORIGINS = [
+    # 1. Production Render Backend (Same-Origin / Direct)
+    "https://optionsbackend.onrender.com",
+
+    # 2. Capacitor Android Native Application (Configured via androidScheme: "https")
+    "https://localhost",
+
+    # 3. Native WebView Fallbacks
+    "capacitor://localhost",
+    "http://localhost",
+
+    # 4. Local Desktop Development Servers (Vite & Localhost)
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+CORS(
+    app,
+    origins=ALLOWED_ORIGINS,
+    supports_credentials=True,
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Admin-Key",
+        "X-API-Key",
+        "x-fyers-token"
+    ],
+    methods=["GET", "POST", "OPTIONS"]
+)
+
+def require_admin_key(f):
+    """
+    Decorator enforcing administrative authentication for privileged endpoints.
+    Requires an administrative secret matching the server's ADMIN_API_KEY environment variable.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        expected_key = os.getenv("ADMIN_API_KEY", "").strip()
+        
+        # 1. Fail-Closed: If ADMIN_API_KEY is not configured on the server, reject all calls
+        if not expected_key:
+            return jsonify({
+                "ok": False,
+                "error": "Administrative interface is not configured on this server."
+            }), 503
+
+        # 2. Extract key from incoming headers (supporting standard admin headers)
+        provided_key = (
+            request.headers.get("X-Admin-Key") or
+            request.headers.get("X-API-Key") or
+            ""
+        ).strip()
+
+        # Alternative: Authorization: Bearer <ADMIN_API_KEY>
+        auth_header = request.headers.get("Authorization", "").strip()
+        if not provided_key and auth_header.startswith("Bearer "):
+            provided_key = auth_header.split(" ", 1)[1].strip()
+
+        # 3. Constant-time comparison to prevent timing side-channel attacks
+        if not provided_key or not hmac.compare_digest(provided_key, expected_key):
+            return jsonify({
+                "ok": False,
+                "error": "Unauthorized: Invalid or missing administrative key."
+            }), 401
+
+        return f(*args, **kwargs)
+    return decorated_function
 
 # Serve React App
 @app.route("/", defaults={"path": ""})
@@ -95,7 +184,7 @@ def serve_react(path):
 from flask_socketio import SocketIO, emit, join_room, leave_room
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
+    cors_allowed_origins=ALLOWED_ORIGINS,
     path="/api/socket.io",
     ping_timeout=10,
     ping_interval=5,
@@ -111,13 +200,29 @@ def gc_worker():
 
 threading.Thread(target=gc_worker, daemon=True).start()
 
+def _is_known_api_path(path):
+    for rule in app.url_map.iter_rules():
+        if rule.rule == path:
+            return True
+    return False
+
 @app.errorhandler(404)
 def not_found(e):
     if request.path.startswith('/api/'):
+        if _is_known_api_path(request.path):
+            return jsonify({"error": "Method not allowed"}), 405
         return jsonify({"error": "Not found"}), 404
     if dist_folder.exists():
         return app.send_static_file('index.html')
     return "Frontend not built yet", 404
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    if request.path.startswith('/api/'):
+        if not _is_known_api_path(request.path):
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({"error": "Method not allowed"}), 405
+    return e
 
 @app.route('/')
 def index():
@@ -8257,8 +8362,6 @@ def api_debug_runtime():
         "ok": True,
         "fyersInitialized": fyers is not None,
         "build": "option-dashboard-fo-breadth-20260531-1200",
-        "cwd": os.getcwd(),
-        "file": __file__,
         "testQuote": test_quote_resp,
         **get_fyers_env_status()
     })
@@ -8293,7 +8396,7 @@ def fyers_token_status():
     # session against FYERS so mobile does not show Connected for an expired or
     # rejected token.
     token_valid, validation_error = validate_fyers_session_token()
-    return jsonify({
+    resp = jsonify({
         "ok": True,
         "timestamp": ist_now().strftime("%d-%m-%Y %H:%M:%S"),
         "marketOpen": is_market_open(),
@@ -8301,6 +8404,8 @@ def fyers_token_status():
         "tokenValidationError": validation_error or None,
         **get_fyers_env_status(),
     })
+    resp.headers["Cache-Control"] = "no-store, private"
+    return resp
 
 @app.route("/api/fyers/login-url")
 def fyers_login_url():
@@ -8335,45 +8440,13 @@ def fyers_login_url():
 
 @app.route("/api/fyers/order", methods=["POST"])
 def fyers_place_order():
-    if not fyers:
-        return jsonify({"ok": False, "error": "Fyers not initialized. Please log in."}), 401
-    
-    payload = request.get_json(silent=True) or {}
-    symbol = payload.get("symbol")
-    qty = payload.get("qty", 1)
-    side = payload.get("side", 1) # 1: Buy, -1: Sell
-    order_type = payload.get("type", 2) # 2: Market, 1: Limit
-    product = payload.get("productType", "MARGIN") # MARGIN or INTRADAY
-    limit_price = payload.get("limitPrice", 0)
-
-    if not symbol:
-        return jsonify({"ok": False, "error": "Missing symbol"}), 400
-
-    order_data = {
-        "symbol": symbol,
-        "qty": int(qty),
-        "type": int(order_type),
-        "side": int(side),
-        "productType": product,
-        "limitPrice": float(limit_price),
-        "stopPrice": 0,
-        "validity": "DAY",
-        "disclosedQty": 0,
-        "offlineOrder": False,
-    }
-
-    try:
-        _client = get_request_fyers_client() or fyers
-        response = (_client or fyers).place_order(data=order_data)
-        if response.get("s") == "ok" or response.get("code") == 200:
-            return jsonify({"ok": True, "message": "Order placed successfully", "data": response})
-        else:
-            return jsonify({"ok": False, "error": response.get("message", "Order failed"), "data": response}), 400
-    except Exception as e:
-        print("Order placement error:", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({
+        "ok": False,
+        "error": "FYERS order placement is permanently disabled. MarketMantra uses Kotak Neo for trade execution."
+    }), 410
 
 @app.route("/api/fyers/save-token", methods=["POST"])
+@require_admin_key
 def fyers_save_token():
     global _QUOTE_COOLDOWN_UNTIL, FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME, _FYERS_VALIDATION_CACHE
     load_dotenv(dotenv_path=ENV_PATH, override=True)
@@ -8386,17 +8459,39 @@ def fyers_save_token():
     if direct_token:
         access_token = normalize_fyers_access_token(client_id, direct_token)
         is_active_token = False
-        if fyersModel and client_id:
-            try:
-                test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
-                configure_fyers_timeout(test_inst)
-                test_prof = test_inst.get_profile() or {}
-                if test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"):
-                    is_active_token = True
-            except Exception:
-                pass
+        validation_err_msg = "Token validation failed with FYERS API."
 
-        if is_active_token or not looks_like_raw_fyers_auth_code(direct_token):
+        if not client_id:
+            return jsonify({
+                "ok": False,
+                "error": "FYERS_CLIENT_ID is not configured on this server.",
+                **get_fyers_env_status(),
+            }), 400
+
+        if not fyersModel:
+            return jsonify({
+                "ok": False,
+                "error": "FYERS SDK is unavailable on this server. Token validation cannot be performed.",
+                **get_fyers_env_status(),
+            }), 503
+
+        try:
+            test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+            configure_fyers_timeout(test_inst)
+            test_prof = test_inst.get_profile() or {}
+            if isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data")):
+                is_active_token = True
+            else:
+                validation_err_msg = "Token was rejected by FYERS API as invalid or expired."
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Failed to communicate with FYERS API during token validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 400
+
+        if is_active_token:
             save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
             mark_fyers_token_ready(client_id, access_token)
             refresh_fyers_from_env(force=True)
@@ -8412,23 +8507,28 @@ def fyers_save_token():
                 "ok": True,
                 "message": "Fyers access token verified and active for today.",
                 "tokenValid": True,
-                "accessToken": access_token,
-                "access_token": access_token,
                 "tokenValidationError": None,
                 **get_fyers_env_status(),
             })
-        else:
+        elif looks_like_raw_fyers_auth_code(direct_token):
             payload["authCode"] = direct_token
+        else:
+            return jsonify({
+                "ok": False,
+                "error": f"Invalid FYERS access token: {validation_err_msg}",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 400
 
     auth_code = extract_fyers_auth_code(payload.get("authCode") or payload.get("finalUrl"))
 
     # Never log auth_code/finalUrl: both are sensitive authentication material.
     if not fyersModel:
-        return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
+        return jsonify({"ok": False, "error": "FYERS SDK is unavailable on this server."}), 503
     if not client_id or not secret_key:
-        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY. On Render, add them in Environment Variables."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY on server."}), 400
     if not auth_code:
-        return jsonify({"ok": False, "error": "Paste the final Fyers redirect URL or auth_code."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS authorization code or redirect URL."}), 400
 
     try:
         session = fyersModel.SessionModel(
@@ -8445,9 +8545,20 @@ def fyers_save_token():
         if not access_token:
             return jsonify({
                 "ok": False,
-                "error": f"Fyers did not return an access_token. Reason: {resp.get('message', resp)}",
-                "response": resp,
-            }), 200
+                "error": "FYERS authorization code exchange failed to produce an access token.",
+            }), 400
+
+        # Validate with get_profile() before saving
+        test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+        configure_fyers_timeout(test_inst)
+        test_prof = test_inst.get_profile() or {}
+        if not (isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"))):
+            return jsonify({
+                "ok": False,
+                "error": "Exchanged token was rejected by FYERS profile validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 400
 
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
@@ -8464,35 +8575,40 @@ def fyers_save_token():
             "ok": True,
             "message": "Fyers token generated and connection initialized.",
             "tokenValid": True,
-            "accessToken": access_token,
-            "access_token": access_token,
             "tokenValidationError": None,
             **get_fyers_env_status(),
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 200
+    except Exception:
+        return jsonify({"ok": False, "error": "An error occurred during FYERS authorization code exchange."}), 500
 
 
-@app.route("/api/fyers/totp-login", methods=["POST", "GET"])
+@app.route("/api/fyers/totp-login", methods=["POST"])
+@require_admin_key
 def fyers_totp_login():
     global _QUOTE_COOLDOWN_UNTIL
     refresh_fyers_from_env()
-    payload = request.get_json(silent=True) or {}
-    
-    client_id = (payload.get("clientId") or os.getenv("FYERS_CLIENT_ID", "")).strip()
-    secret_key = (payload.get("secretKey") or os.getenv("FYERS_SECRET_KEY", "")).strip()
-    fyers_id = (payload.get("fyersId") or os.getenv("FYERS_ID", "")).strip()
-    fyers_pin = (payload.get("fyersPin") or payload.get("pin") or os.getenv("FYERS_PIN", "")).strip()
-    totp_key = (payload.get("totpKey") or os.getenv("FYERS_TOTP_KEY", "")).strip()
+
+    client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
+    secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
+    fyers_id = os.getenv("FYERS_ID", "").strip()
+    fyers_pin = os.getenv("FYERS_PIN", "").strip()
+    totp_key = os.getenv("FYERS_TOTP_KEY", "").strip()
 
     if not client_id or not secret_key:
-        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY on server."}), 400
     if not fyers_id or not fyers_pin or not totp_key:
         return jsonify({
             "ok": False,
-            "error": "Missing TOTP credentials (FYERS_ID, FYERS_PIN, or FYERS_TOTP_KEY). Please provide them.",
+            "error": "Missing server TOTP credentials (FYERS_ID, FYERS_PIN, or FYERS_TOTP_KEY).",
             **get_fyers_env_status(),
-        }), 200
+        }), 400
+
+    if not fyersModel:
+        return jsonify({
+            "ok": False,
+            "error": "FYERS SDK is unavailable on this server. Token validation cannot be performed.",
+            **get_fyers_env_status(),
+        }), 503
 
     try:
         from totp_login import generate_fyers_token_via_totp
@@ -8504,43 +8620,43 @@ def fyers_totp_login():
             secret_key=secret_key
         )
         if not access_token:
-            return jsonify({"ok": False, "error": "Automated TOTP login failed to produce an access token."}), 200
+            return jsonify({"ok": False, "error": "Automated TOTP login failed to produce an access token."}), 502
+
+        # Mandatory pre-commit token validation with FYERS get_profile()
+        try:
+            test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+            configure_fyers_timeout(test_inst)
+            test_prof = test_inst.get_profile() or {}
+            if not (isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"))):
+                return jsonify({
+                    "ok": False,
+                    "error": "Generated TOTP token was rejected by FYERS profile validation.",
+                    "tokenValid": False,
+                    **get_fyers_env_status(),
+                }), 502
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Failed to communicate with FYERS API during TOTP token validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 502
 
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
-        if payload.get("fyersId"): save_env_value(ENV_PATH, "FYERS_ID", fyers_id)
-        if payload.get("fyersPin"): save_env_value(ENV_PATH, "FYERS_PIN", fyers_pin)
-        if payload.get("totpKey"): save_env_value(ENV_PATH, "FYERS_TOTP_KEY", totp_key)
-
+        mark_fyers_token_ready(client_id, access_token)
         _QUOTE_COOLDOWN_UNTIL = 0.0
         refresh_fyers_from_env(force=True)
         clear_live_market_caches()
 
         return jsonify({
             "ok": True,
-            "message": "TOTP Login successful! Access token generated and active.",
+            "message": "TOTP login successful. Token refreshed and active.",
+            "tokenValid": True,
+            "tokenValidationError": None,
             **get_fyers_env_status(),
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"TOTP Login Error: {str(e)}"}), 200
-
-
-@app.route("/api/fyers/save-totp-credentials", methods=["POST"])
-def fyers_save_totp_credentials():
-    payload = request.get_json(silent=True) or {}
-    fyers_id = payload.get("fyersId", "").strip()
-    fyers_pin = (payload.get("fyersPin") or payload.get("pin") or "").strip()
-    totp_key = payload.get("totpKey", "").strip()
-
-    if fyers_id: save_env_value(ENV_PATH, "FYERS_ID", fyers_id)
-    if fyers_pin: save_env_value(ENV_PATH, "FYERS_PIN", fyers_pin)
-    if totp_key: save_env_value(ENV_PATH, "FYERS_TOTP_KEY", totp_key)
-
-    refresh_fyers_from_env()
-    return jsonify({
-        "ok": True,
-        "message": "TOTP credentials saved to server configuration.",
-        **get_fyers_env_status(),
-    })
+    except Exception:
+        return jsonify({"ok": False, "error": "Automated TOTP authentication failed."}), 500
 
 
 YAHOO_INDEX_MAP = {
