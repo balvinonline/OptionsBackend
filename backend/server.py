@@ -8603,6 +8603,13 @@ def fyers_totp_login():
             **get_fyers_env_status(),
         }), 400
 
+    if not fyersModel:
+        return jsonify({
+            "ok": False,
+            "error": "FYERS SDK is unavailable on this server. Token validation cannot be performed.",
+            **get_fyers_env_status(),
+        }), 503
+
     try:
         from totp_login import generate_fyers_token_via_totp
         access_token = generate_fyers_token_via_totp(
@@ -8615,24 +8622,25 @@ def fyers_totp_login():
         if not access_token:
             return jsonify({"ok": False, "error": "Automated TOTP login failed to produce an access token."}), 502
 
-        # Validate token with FYERS get_profile() before committing
-        if fyersModel:
-            try:
-                test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
-                configure_fyers_timeout(test_inst)
-                test_prof = test_inst.get_profile() or {}
-                if not (isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"))):
-                    return jsonify({
-                        "ok": False,
-                        "error": "Generated TOTP token was rejected by FYERS profile validation.",
-                        **get_fyers_env_status(),
-                    }), 502
-            except Exception:
+        # Mandatory pre-commit token validation with FYERS get_profile()
+        try:
+            test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+            configure_fyers_timeout(test_inst)
+            test_prof = test_inst.get_profile() or {}
+            if not (isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"))):
                 return jsonify({
                     "ok": False,
-                    "error": "Failed to communicate with FYERS API during TOTP token validation.",
+                    "error": "Generated TOTP token was rejected by FYERS profile validation.",
+                    "tokenValid": False,
                     **get_fyers_env_status(),
                 }), 502
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Failed to communicate with FYERS API during TOTP token validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 502
 
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
