@@ -8459,27 +8459,37 @@ def fyers_save_token():
     if direct_token:
         access_token = normalize_fyers_access_token(client_id, direct_token)
         is_active_token = False
-        validation_err_msg = "Token validation failed with FYERS API"
-        if fyersModel and client_id:
-            try:
-                test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
-                configure_fyers_timeout(test_inst)
-                test_prof = test_inst.get_profile() or {}
-                if test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"):
-                    is_active_token = True
-                else:
-                    validation_err_msg = test_prof.get("message", "Token is invalid or expired")
-            except Exception as e:
-                validation_err_msg = str(e)
-        elif not client_id:
+        validation_err_msg = "Token validation failed with FYERS API."
+
+        if not client_id:
             return jsonify({
                 "ok": False,
                 "error": "FYERS_CLIENT_ID is not configured on this server.",
                 **get_fyers_env_status(),
             }), 400
-        else:
-            # Fallback if fyersModel library is not loaded
-            is_active_token = True
+
+        if not fyersModel:
+            return jsonify({
+                "ok": False,
+                "error": "FYERS SDK is unavailable on this server. Token validation cannot be performed.",
+                **get_fyers_env_status(),
+            }), 503
+
+        try:
+            test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+            configure_fyers_timeout(test_inst)
+            test_prof = test_inst.get_profile() or {}
+            if isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data")):
+                is_active_token = True
+            else:
+                validation_err_msg = "Token was rejected by FYERS API as invalid or expired."
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Failed to communicate with FYERS API during token validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 400
 
         if is_active_token:
             save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
@@ -8514,11 +8524,11 @@ def fyers_save_token():
 
     # Never log auth_code/finalUrl: both are sensitive authentication material.
     if not fyersModel:
-        return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
+        return jsonify({"ok": False, "error": "FYERS SDK is unavailable on this server."}), 503
     if not client_id or not secret_key:
-        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY. On Render, add them in Environment Variables."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY on server."}), 400
     if not auth_code:
-        return jsonify({"ok": False, "error": "Paste the final Fyers redirect URL or auth_code."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS authorization code or redirect URL."}), 400
 
     try:
         session = fyersModel.SessionModel(
@@ -8535,9 +8545,20 @@ def fyers_save_token():
         if not access_token:
             return jsonify({
                 "ok": False,
-                "error": f"Fyers did not return an access_token. Reason: {resp.get('message', resp)}",
-                "response": resp,
-            }), 200
+                "error": "FYERS authorization code exchange failed to produce an access token.",
+            }), 400
+
+        # Validate with get_profile() before saving
+        test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+        configure_fyers_timeout(test_inst)
+        test_prof = test_inst.get_profile() or {}
+        if not (isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"))):
+            return jsonify({
+                "ok": False,
+                "error": "Exchanged token was rejected by FYERS profile validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 400
 
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
@@ -8557,8 +8578,8 @@ def fyers_save_token():
             "tokenValidationError": None,
             **get_fyers_env_status(),
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 200
+    except Exception:
+        return jsonify({"ok": False, "error": "An error occurred during FYERS authorization code exchange."}), 500
 
 
 @app.route("/api/fyers/totp-login", methods=["POST"])
@@ -8594,6 +8615,25 @@ def fyers_totp_login():
         if not access_token:
             return jsonify({"ok": False, "error": "Automated TOTP login failed to produce an access token."}), 502
 
+        # Validate token with FYERS get_profile() before committing
+        if fyersModel:
+            try:
+                test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+                configure_fyers_timeout(test_inst)
+                test_prof = test_inst.get_profile() or {}
+                if not (isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"))):
+                    return jsonify({
+                        "ok": False,
+                        "error": "Generated TOTP token was rejected by FYERS profile validation.",
+                        **get_fyers_env_status(),
+                    }), 502
+            except Exception:
+                return jsonify({
+                    "ok": False,
+                    "error": "Failed to communicate with FYERS API during TOTP token validation.",
+                    **get_fyers_env_status(),
+                }), 502
+
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
         _QUOTE_COOLDOWN_UNTIL = 0.0
@@ -8607,8 +8647,8 @@ def fyers_totp_login():
             "tokenValidationError": None,
             **get_fyers_env_status(),
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"TOTP Login Error: {str(e)}"}), 500
+    except Exception:
+        return jsonify({"ok": False, "error": "Automated TOTP authentication failed."}), 500
 
 
 YAHOO_INDEX_MAP = {
