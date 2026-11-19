@@ -1247,6 +1247,55 @@ INDEX_STRIKE_INTERVALS = {
     "BANKEX": 100,
 }
 
+INDEX_SYMBOL_ALIASES = {
+    "NIFTY": "NIFTY",
+    "NIFTY50": "NIFTY",
+    "NSE:NIFTY50-INDEX": "NIFTY",
+    "NSE:NIFTY-INDEX": "NIFTY",
+    "BANKNIFTY": "BANKNIFTY",
+    "NIFTYBANK": "BANKNIFTY",
+    "NSE:BANKNIFTY-INDEX": "BANKNIFTY",
+    "NSE:NIFTYBANK-INDEX": "BANKNIFTY",
+    "FINNIFTY": "FINNIFTY",
+    "NSE:FINNIFTY-INDEX": "FINNIFTY",
+    "MIDCPNIFTY": "MIDCPNIFTY",
+    "NSE:MIDCPNIFTY-INDEX": "MIDCPNIFTY",
+    "SENSEX": "SENSEX",
+    "BSE:SENSEX-INDEX": "SENSEX",
+    "BSE:SENSEX": "SENSEX",
+    "BANKEX": "BANKEX",
+    "BSE:BANKEX-INDEX": "BANKEX",
+    "BSE:BANKEX": "BANKEX",
+}
+
+
+def normalize_index_symbol(symbol):
+    """
+    Normalizes index symbol variations (e.g. 'NSE:NIFTY50-INDEX', 'NSE:BANKNIFTY-INDEX',
+    'NSE:NIFTYBANK-INDEX', 'BSE:SENSEX-INDEX') to their canonical index key without
+    ambiguous substring collisions.
+    """
+    sym = str(symbol or "").strip().upper()
+    if sym in INDEX_SYMBOL_ALIASES:
+        return INDEX_SYMBOL_ALIASES[sym]
+    cleaned = sym.replace("NSE:", "").replace("BSE:", "").replace("-INDEX", "").replace("-EQ", "").strip()
+    if cleaned in INDEX_SYMBOL_ALIASES:
+        return INDEX_SYMBOL_ALIASES[cleaned]
+    # Check specific multi-word tokens in descending order of specificity to avoid substring overlaps
+    if "BANKNIFTY" in cleaned or "NIFTYBANK" in cleaned:
+        return "BANKNIFTY"
+    if "FINNIFTY" in cleaned:
+        return "FINNIFTY"
+    if "MIDCPNIFTY" in cleaned:
+        return "MIDCPNIFTY"
+    if "BANKEX" in cleaned:
+        return "BANKEX"
+    if "SENSEX" in cleaned:
+        return "SENSEX"
+    if "NIFTY" in cleaned:
+        return "NIFTY"
+    return cleaned
+
 
 def get_atm_strike_bucket(symbol_key, spot_price):
     """
@@ -1258,13 +1307,8 @@ def get_atm_strike_bucket(symbol_key, spot_price):
     spot = safe_float(spot_price, None)
     if spot is None or spot <= 0:
         return 0
-    sym = str(symbol_key or "").strip().upper()
-    step = INDEX_STRIKE_INTERVALS.get(sym)
-    if not step:
-        for k, v in INDEX_STRIKE_INTERVALS.items():
-            if k in sym:
-                step = v
-                break
+    canonical = normalize_index_symbol(symbol_key)
+    step = INDEX_STRIKE_INTERVALS.get(canonical)
     if not step or step <= 0:
         step = 50
     return int(math.floor((spot / step) + 0.5)) * step
