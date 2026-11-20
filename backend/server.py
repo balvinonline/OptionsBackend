@@ -55,6 +55,10 @@ def is_market_open():
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 from flask_cors import CORS
+try:
+    from flask_compress import Compress
+except ImportError:
+    Compress = None
 from dotenv import load_dotenv
 
 try:
@@ -162,6 +166,21 @@ def require_admin_key(f):
 
         return f(*args, **kwargs)
     return decorated_function
+
+if Compress is not None:
+    app.config["COMPRESS_MIMETYPES"] = [
+        "text/html",
+        "text/css",
+        "text/plain",
+        "text/xml",
+        "application/json",
+        "application/javascript",
+    ]
+    app.config["COMPRESS_LEVEL"] = 6
+    app.config["COMPRESS_MIN_SIZE"] = 500
+    app.config["COMPRESS_STREAMS"] = False
+    app.config["COMPRESS_ALGORITHM"] = ["gzip", "deflate"]
+    Compress(app)
 
 # Serve React App
 @app.route("/", defaults={"path": ""})
@@ -1323,6 +1342,82 @@ SECTOR_INDEX_SYMBOLS = {
     "Consumer Durables": "NSE:NIFTYCONSRDURBL-INDEX",
     "Oil & Gas": "NSE:NIFTYOILANDGAS-INDEX",
 }
+
+INDEX_STRIKE_INTERVALS = {
+    "NIFTY": 50,
+    "BANKNIFTY": 100,
+    "SENSEX": 100,
+    "FINNIFTY": 50,
+    "MIDCPNIFTY": 25,
+    "BANKEX": 100,
+}
+
+INDEX_SYMBOL_ALIASES = {
+    "NIFTY": "NIFTY",
+    "NIFTY50": "NIFTY",
+    "NSE:NIFTY50-INDEX": "NIFTY",
+    "NSE:NIFTY-INDEX": "NIFTY",
+    "BANKNIFTY": "BANKNIFTY",
+    "NIFTYBANK": "BANKNIFTY",
+    "NSE:BANKNIFTY-INDEX": "BANKNIFTY",
+    "NSE:NIFTYBANK-INDEX": "BANKNIFTY",
+    "FINNIFTY": "FINNIFTY",
+    "NSE:FINNIFTY-INDEX": "FINNIFTY",
+    "MIDCPNIFTY": "MIDCPNIFTY",
+    "NSE:MIDCPNIFTY-INDEX": "MIDCPNIFTY",
+    "SENSEX": "SENSEX",
+    "BSE:SENSEX-INDEX": "SENSEX",
+    "BSE:SENSEX": "SENSEX",
+    "BANKEX": "BANKEX",
+    "BSE:BANKEX-INDEX": "BANKEX",
+    "BSE:BANKEX": "BANKEX",
+}
+
+
+def normalize_index_symbol(symbol):
+    """
+    Normalizes index symbol variations (e.g. 'NSE:NIFTY50-INDEX', 'NSE:BANKNIFTY-INDEX',
+    'NSE:NIFTYBANK-INDEX', 'BSE:SENSEX-INDEX') to their canonical index key without
+    ambiguous substring collisions.
+    """
+    sym = str(symbol or "").strip().upper()
+    if sym in INDEX_SYMBOL_ALIASES:
+        return INDEX_SYMBOL_ALIASES[sym]
+    cleaned = sym.replace("NSE:", "").replace("BSE:", "").replace("-INDEX", "").replace("-EQ", "").strip()
+    if cleaned in INDEX_SYMBOL_ALIASES:
+        return INDEX_SYMBOL_ALIASES[cleaned]
+    # Check specific multi-word tokens in descending order of specificity to avoid substring overlaps
+    if "BANKNIFTY" in cleaned or "NIFTYBANK" in cleaned:
+        return "BANKNIFTY"
+    if "FINNIFTY" in cleaned:
+        return "FINNIFTY"
+    if "MIDCPNIFTY" in cleaned:
+        return "MIDCPNIFTY"
+    if "BANKEX" in cleaned:
+        return "BANKEX"
+    if "SENSEX" in cleaned:
+        return "SENSEX"
+    if "NIFTY" in cleaned:
+        return "NIFTY"
+    return cleaned
+
+
+def get_atm_strike_bucket(symbol_key, spot_price):
+    """
+    Derives the ATM strike bucket for a given symbol and spot price using the
+    instrument's actual exchange strike interval. This prevents rapid 1-point spot
+    fluctuations within the same strike bracket from causing unnecessary cache misses,
+    while guaranteeing that boundary crossings immediately yield correctly re-centred chains.
+    """
+    spot = safe_float(spot_price, None)
+    if spot is None or spot <= 0:
+        return 0
+    canonical = normalize_index_symbol(symbol_key)
+    step = INDEX_STRIKE_INTERVALS.get(canonical)
+    if not step or step <= 0:
+        step = 50
+    return int(math.floor((spot / step) + 0.5)) * step
+
 
 MARKET_NEWS_FEEDS = [
     {
@@ -4363,9 +4458,9 @@ def infer_spot_from_option_chain(rows):
 
 
 def get_option_chain_rows_for_index(symbol_key, spot_price, cache_ttl=8, strikecount=30, expiry_timestamp=None, expiry_date=None):
-    cache_spot = round(safe_float(spot_price, 0) or 0)
+    atm_strike = get_atm_strike_bucket(symbol_key, spot_price)
     expiry_key = str(expiry_timestamp or expiry_date or "front")
-    cache_key = f"{symbol_key}:{cache_spot}:{int(strikecount or 12)}:{expiry_key}"
+    cache_key = f"{symbol_key}:{atm_strike}:{int(strikecount or 12)}:{expiry_key}"
 
     cached = get_cached("option_chain", key=cache_key, ttl=cache_ttl)
     if cached is not None:
