@@ -1161,7 +1161,8 @@ def refresh_fyers_from_env(force=False):
     return fyers
 
 def clear_live_market_caches():
-    _QUOTE_CACHE.clear()
+    with _QUOTE_CACHE_LOCK:
+        _QUOTE_CACHE.clear()
     _MARKET_STRIP_CACHE["ts"] = 0.0
     _MARKET_STRIP_CACHE["items"] = []
     for bucket in ["home_index_quotes", "home_index_analytics", "home_dashboard", "sector_strength"]:
@@ -1707,6 +1708,11 @@ _MARKET_STRIP_CACHE = {
     "items": []
 }
 _QUOTE_CACHE = {}
+_QUOTE_CACHE_LOCK = threading.RLock()
+QUOTE_CACHE_MAX_KEYS = 5000
+FYERS_WS_TICKS_MAX_KEYS = 2000
+PREV_TICK_VOLUMES_MAX_KEYS = 1500
+_ACTIVE_WS_SYMBOLS_SNAPSHOT = frozenset()
 _QUOTE_COOLDOWN_UNTIL = 0.0
 QUOTE_CACHE_TTL = 4
 QUOTE_STALE_TTL = 180
@@ -2268,13 +2274,73 @@ def quote_block_has_value(block):
     )
 
 
+_LAST_QUOTE_CACHE_CAPACITY_WARN = 0.0
+
+
+def _prune_quote_cache_locked(now):
+    """Ensure _QUOTE_CACHE remains bounded with thread-safe expiry and LRU eviction.
+    Active instruments receiving live updates have fresh timestamps and are never evicted.
+    All symbols currently subscribed on WebSocket are explicitly protected from eviction in ALL phases.
+    """
+    global _LAST_QUOTE_CACHE_CAPACITY_WARN
+    if len(_QUOTE_CACHE) <= QUOTE_CACHE_MAX_KEYS:
+        return
+
+    protected_keys = _ACTIVE_WS_SYMBOLS_SNAPSHOT
+
+    # Phase 1: Evict stale items older than QUOTE_STALE_TTL (180s) that are NOT active subscriptions
+    stale_keys = [
+        k for k, v in _QUOTE_CACHE.items()
+        if (now - (v or {}).get("ts", 0)) > QUOTE_STALE_TTL and k not in protected_keys
+    ]
+    for k in stale_keys:
+        _QUOTE_CACHE.pop(k, None)
+
+    # Phase 2: If still above capacity, evict non-active items first via LRU
+    if len(_QUOTE_CACHE) > QUOTE_CACHE_MAX_KEYS:
+        unprotected_sorted = sorted(
+            [k for k in _QUOTE_CACHE if k not in protected_keys],
+            key=lambda k: (_QUOTE_CACHE.get(k) or {}).get("ts", 0)
+        )
+        excess = len(_QUOTE_CACHE) - QUOTE_CACHE_MAX_KEYS
+        for k in unprotected_sorted[:excess]:
+            _QUOTE_CACHE.pop(k, None)
+
+    # Phase 3: Failsafe - never evict active WebSocket subscriptions in any phase.
+    # If active subscriptions alone exceed capacity, preserve all of them and report the alert.
+    if len(_QUOTE_CACHE) > QUOTE_CACHE_MAX_KEYS:
+        # Purge any remaining unprotected keys regardless of age
+        remaining_unprotected = [k for k in _QUOTE_CACHE if k not in protected_keys]
+        for k in remaining_unprotected:
+            _QUOTE_CACHE.pop(k, None)
+            if len(_QUOTE_CACHE) <= QUOTE_CACHE_MAX_KEYS:
+                break
+
+        # If active subscriptions alone exceed QUOTE_CACHE_MAX_KEYS, preserve all active subscriptions
+        if len(_QUOTE_CACHE) > QUOTE_CACHE_MAX_KEYS and (now - _LAST_QUOTE_CACHE_CAPACITY_WARN > 60.0):
+            _LAST_QUOTE_CACHE_CAPACITY_WARN = now
+            print(
+                f"[QuoteCache] Active WebSocket subscriptions ({len(_QUOTE_CACHE)}) exceed "
+                f"configured capacity ({QUOTE_CACHE_MAX_KEYS}). Preserving all active subscriptions."
+            )
+
+
 def cache_quote_block(symbol, block):
     if not quote_block_has_value(block):
         return
     now = time.time()
-    for key in [symbol, normalize_symbol_key(symbol), normalize_symbol_key(block.get("symbol", ""))]:
-        if key:
-            _QUOTE_CACHE[key] = {"ts": now, "data": block}
+    keys_to_update = [k for k in [symbol, normalize_symbol_key(symbol), normalize_symbol_key(block.get("symbol", ""))] if k]
+    if not keys_to_update:
+        return
+    with _QUOTE_CACHE_LOCK:
+        for key in keys_to_update:
+            existing = (_QUOTE_CACHE.get(key) or {}).get("data") or {}
+            merged = {**existing}
+            for k, v in block.items():
+                if v is not None or k not in merged:
+                    merged[k] = v
+            _QUOTE_CACHE[key] = {"ts": now, "data": merged}
+        _prune_quote_cache_locked(now)
 
 
 def fyers_ws_access_token():
@@ -2434,6 +2500,87 @@ def normalize_ws_messages(message):
     }]
 
 
+_LAST_FYERS_WS_TICKS_CAPACITY_WARN = 0.0
+_LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = 0.0
+
+
+def _prune_fyers_ws_ticks_locked():
+    """Ensure _FYERS_WS_TICKS remains bounded without evicting active subscribed symbols.
+    Protects both original and normalized symbol keys in all eviction phases.
+    Never evicts an active subscribed symbol, even if active subscriptions exceed capacity.
+    """
+    global _LAST_FYERS_WS_TICKS_CAPACITY_WARN
+    if len(_FYERS_WS_TICKS) <= FYERS_WS_TICKS_MAX_KEYS:
+        return
+
+    active_keys = {s for s in _FYERS_WS_SYMBOLS if s} | {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS if s and normalize_symbol_key(s)}
+
+    # Phase 1: Evict inactive / unsubscribed entries
+    inactive_keys = [k for k in _FYERS_WS_TICKS if k not in active_keys]
+    for k in inactive_keys:
+        _FYERS_WS_TICKS.pop(k, None)
+
+    # Phase 2: If still above capacity, evict ONLY inactive entries ordered by timestamp (failsafe check)
+    if len(_FYERS_WS_TICKS) > FYERS_WS_TICKS_MAX_KEYS:
+        remaining_inactive = [k for k in _FYERS_WS_TICKS if k not in active_keys]
+        if remaining_inactive:
+            try:
+                sorted_inactive = sorted(
+                    remaining_inactive,
+                    key=lambda k: safe_float((_FYERS_WS_TICKS.get(k) or {}).get("ts"), 0)
+                )
+                excess = len(_FYERS_WS_TICKS) - FYERS_WS_TICKS_MAX_KEYS
+                for k in sorted_inactive[:excess]:
+                    _FYERS_WS_TICKS.pop(k, None)
+            except Exception:
+                pass
+
+    # Phase 3: If active entries alone exceed capacity, preserve all active symbols and log throttled warning
+    if len(_FYERS_WS_TICKS) > FYERS_WS_TICKS_MAX_KEYS:
+        now = time.time()
+        if (now - _LAST_FYERS_WS_TICKS_CAPACITY_WARN) > 60.0:
+            _LAST_FYERS_WS_TICKS_CAPACITY_WARN = now
+            print(
+                f"[FyersWsTicks] Active WebSocket subscriptions ({len(_FYERS_WS_TICKS)}) exceed "
+                f"configured capacity ({FYERS_WS_TICKS_MAX_KEYS}). Preserving all active symbols."
+            )
+
+
+def _prune_prev_tick_volumes_locked():
+    """Ensure _PREV_TICK_VOLUMES remains bounded without losing active tracking.
+    Protects both original and normalized symbol keys in all eviction phases.
+    Never evicts active subscribed symbols, even if active subscriptions exceed capacity.
+    """
+    global _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN
+    if len(_PREV_TICK_VOLUMES) <= PREV_TICK_VOLUMES_MAX_KEYS:
+        return
+
+    active_keys = {s for s in _FYERS_WS_SYMBOLS if s} | {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS if s and normalize_symbol_key(s)}
+
+    # Phase 1: Evict inactive / unsubscribed entries
+    inactive_keys = [k for k in _PREV_TICK_VOLUMES if k not in active_keys]
+    for k in inactive_keys:
+        _PREV_TICK_VOLUMES.pop(k, None)
+
+    # Phase 2: If still above capacity, evict ONLY inactive entries (never evict active symbols)
+    if len(_PREV_TICK_VOLUMES) > PREV_TICK_VOLUMES_MAX_KEYS:
+        remaining_inactive = [k for k in _PREV_TICK_VOLUMES if k not in active_keys]
+        if remaining_inactive:
+            excess = len(_PREV_TICK_VOLUMES) - PREV_TICK_VOLUMES_MAX_KEYS
+            for k in remaining_inactive[:excess]:
+                _PREV_TICK_VOLUMES.pop(k, None)
+
+    # Phase 3: If active entries alone exceed capacity, preserve all active entries and log throttled warning
+    if len(_PREV_TICK_VOLUMES) > PREV_TICK_VOLUMES_MAX_KEYS:
+        now = time.time()
+        if (now - _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN) > 60.0:
+            _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = now
+            print(
+                f"[PrevTickVolumes] Active WebSocket subscriptions ({len(_PREV_TICK_VOLUMES)}) exceed "
+                f"configured capacity ({PREV_TICK_VOLUMES_MAX_KEYS}). Preserving all active tracking."
+            )
+
+
 def on_fyers_ws_message(message):
     ticks = normalize_ws_messages(message)
     if not ticks:
@@ -2490,6 +2637,11 @@ def on_fyers_ws_message(message):
                 })
         _FYERS_WS_STATUS["connected"] = True
         _FYERS_WS_STATUS["updated_at"] = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+        _prune_fyers_ws_ticks_locked()
+        _prune_prev_tick_volumes_locked()
+
+
+
 
 
 def is_meaningful_tick(tick):
@@ -2501,9 +2653,14 @@ def reset_fyers_ws_stream():
 
     with _FYERS_WS_LOCK:
         socket = _FYERS_WS_SOCKET
+        global _ACTIVE_WS_SYMBOLS_SNAPSHOT, _LAST_FYERS_WS_TICKS_CAPACITY_WARN, _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN
         _FYERS_WS_SOCKET = None
         _FYERS_WS_SYMBOLS.clear()
+        _ACTIVE_WS_SYMBOLS_SNAPSHOT = frozenset()
         _FYERS_WS_TICKS.clear()
+        _PREV_TICK_VOLUMES.clear()
+        _LAST_FYERS_WS_TICKS_CAPACITY_WARN = 0.0
+        _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = 0.0
         _FYERS_WS_STATUS.update({
             "connected": False,
             "started": False,
@@ -2558,7 +2715,11 @@ def ensure_fyers_ws_stream(symbols):
 
     with _FYERS_WS_LOCK:
         missing = [symbol for symbol in symbols if symbol not in _FYERS_WS_SYMBOLS]
+        global _ACTIVE_WS_SYMBOLS_SNAPSHOT
         _FYERS_WS_SYMBOLS.update(symbols)
+        _ACTIVE_WS_SYMBOLS_SNAPSHOT = frozenset(
+            {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS} | set(_FYERS_WS_SYMBOLS)
+        )
 
         if _FYERS_WS_SOCKET is not None:
             if missing:
@@ -2622,21 +2783,23 @@ def ensure_fyers_ws_stream(symbols):
 
 
 def get_cached_quote_block(symbol, ttl=QUOTE_CACHE_TTL):
-    item = _QUOTE_CACHE.get(symbol) or _QUOTE_CACHE.get(normalize_symbol_key(symbol))
-    if not item:
+    with _QUOTE_CACHE_LOCK:
+        item = _QUOTE_CACHE.get(symbol) or _QUOTE_CACHE.get(normalize_symbol_key(symbol))
+        if not item:
+            return {}
+        if time.time() - item.get("ts", 0) <= ttl:
+            return {**(item.get("data") or {})}
         return {}
-    if time.time() - item.get("ts", 0) <= ttl:
-        return item.get("data") or {}
-    return {}
 
 
 def get_stale_quote_block(symbol):
-    item = _QUOTE_CACHE.get(symbol) or _QUOTE_CACHE.get(normalize_symbol_key(symbol))
-    if not item:
+    with _QUOTE_CACHE_LOCK:
+        item = _QUOTE_CACHE.get(symbol) or _QUOTE_CACHE.get(normalize_symbol_key(symbol))
+        if not item:
+            return {}
+        if time.time() - item.get("ts", 0) <= QUOTE_STALE_TTL:
+            return {**(item.get("data") or {})}
         return {}
-    if time.time() - item.get("ts", 0) <= QUOTE_STALE_TTL:
-        return item.get("data") or {}
-    return {}
 
 
 def has_meaningful_number(value):
