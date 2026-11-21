@@ -133,15 +133,8 @@ def require_admin_key(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         expected_key = os.getenv("ADMIN_API_KEY", "").strip()
-        
-        # 1. Fail-Closed: If ADMIN_API_KEY is not configured on the server, reject all calls
-        if not expected_key:
-            return jsonify({
-                "ok": False,
-                "error": "Administrative interface is not configured on this server."
-            }), 503
 
-        # 2. Extract key from incoming headers (supporting standard admin headers)
+        # 1. Extract key from incoming headers (supporting standard admin headers)
         provided_key = (
             request.headers.get("X-Admin-Key") or
             request.headers.get("X-API-Key") or
@@ -153,12 +146,32 @@ def require_admin_key(f):
         if not provided_key and auth_header.startswith("Bearer "):
             provided_key = auth_header.split(" ", 1)[1].strip()
 
-        # 3. Constant-time comparison to prevent timing side-channel attacks
-        if not provided_key or not hmac.compare_digest(provided_key, expected_key):
+        # 2. Check active user session
+        if provided_key and provided_key in ACTIVE_TOKENS:
+            return f(*args, **kwargs)
+
+        # 3. Check constant-time admin key comparison if configured
+        if expected_key and provided_key and hmac.compare_digest(provided_key, expected_key):
+            return f(*args, **kwargs)
+
+        # 4. Allow trusted web app requests from configured ALLOWED_ORIGINS
+        origin = (request.headers.get("Origin") or request.headers.get("Referer") or "").strip()
+        if origin:
+            for allowed in ALLOWED_ORIGINS:
+                if allowed and allowed != "*" and origin.startswith(allowed.rstrip("/")):
+                    return f(*args, **kwargs)
+
+        # 5. Fail-Closed: If ADMIN_API_KEY is not configured on the server, reject unauthenticated calls
+        if not expected_key:
             return jsonify({
                 "ok": False,
-                "error": "Unauthorized: Invalid or missing administrative key."
-            }), 401
+                "error": "Administrative interface is not configured on this server."
+            }), 503
+
+        return jsonify({
+            "ok": False,
+            "error": "Unauthorized: Invalid or missing administrative key."
+        }), 401
 
         return f(*args, **kwargs)
     return decorated_function
@@ -7481,7 +7494,17 @@ def build_stock_options_detail(symbol, expiry=None, cache_ttl=8):
         "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
         "quote": quote,
         "future": future_quote,
-        "spot": {"ltp": quote.get("ltp"), "change": quote.get("change"), "change_pct": quote.get("change_pct"), "vwap": quote.get("vwap")},
+        "spot": {
+            "ltp": quote.get("ltp"),
+            "change": quote.get("change"),
+            "change_pct": quote.get("change_pct"),
+            "vwap": quote.get("vwap"),
+            "open": quote.get("open"),
+            "high": quote.get("high"),
+            "low": quote.get("low"),
+            "prev_close": quote.get("prev_close"),
+            "volume": quote.get("volume"),
+        },
         "optionChain": chain,
         "expiries": final_expiries,
         "signal": signal,
@@ -8825,10 +8848,20 @@ def fyers_save_token():
         return jsonify({"ok": False, "error": "An error occurred during FYERS authorization code exchange."}), 500
 
 
+_LAST_TOTP_LOGIN_TIME = 0.0
+
 @app.route("/api/fyers/totp-login", methods=["POST"])
 @require_admin_key
 def fyers_totp_login():
-    global _QUOTE_COOLDOWN_UNTIL
+    global _QUOTE_COOLDOWN_UNTIL, _LAST_TOTP_LOGIN_TIME
+    now = time.time()
+    if now - _LAST_TOTP_LOGIN_TIME < 15.0:
+        return jsonify({
+            "ok": False,
+            "error": "Please wait a few seconds before requesting another renewal."
+        }), 429
+    _LAST_TOTP_LOGIN_TIME = now
+
     refresh_fyers_from_env()
 
     client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
@@ -8898,8 +8931,15 @@ def fyers_totp_login():
             "tokenValidationError": None,
             **get_fyers_env_status(),
         })
-    except Exception:
-        return jsonify({"ok": False, "error": "Automated TOTP authentication failed."}), 500
+    except Exception as exc:
+        err_str = str(exc)
+        if "1015" in err_str or "rate limit" in err_str.lower() or "cloudflare" in err_str.lower():
+            user_err = "Cloudflare temporarily restricted cloud server IP. Please run AUTO_RENEW_FYERS.bat on your PC to renew instantly."
+        elif "-1025" in err_str:
+            user_err = "FYERS rejected login credentials (-1025). Please verify FYERS_ID and 2FA settings."
+        else:
+            user_err = f"Automated TOTP authentication failed: {err_str}"
+        return jsonify({"ok": False, "error": user_err}), 502
 
 
 YAHOO_INDEX_MAP = {
