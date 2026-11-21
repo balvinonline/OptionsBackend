@@ -2500,42 +2500,85 @@ def normalize_ws_messages(message):
     }]
 
 
+_LAST_FYERS_WS_TICKS_CAPACITY_WARN = 0.0
+_LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = 0.0
+
+
 def _prune_fyers_ws_ticks_locked():
-    """Ensure _FYERS_WS_TICKS remains bounded without evicting active subscribed symbols."""
+    """Ensure _FYERS_WS_TICKS remains bounded without evicting active subscribed symbols.
+    Protects both original and normalized symbol keys in all eviction phases.
+    Never evicts an active subscribed symbol, even if active subscriptions exceed capacity.
+    """
+    global _LAST_FYERS_WS_TICKS_CAPACITY_WARN
     if len(_FYERS_WS_TICKS) <= FYERS_WS_TICKS_MAX_KEYS:
         return
-    # Phase 1: Evict keys not currently subscribed
-    active_normalized = {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS} | _FYERS_WS_SYMBOLS
-    stale_keys = [k for k in _FYERS_WS_TICKS if k not in active_normalized]
-    for k in stale_keys:
+
+    active_keys = {s for s in _FYERS_WS_SYMBOLS if s} | {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS if s and normalize_symbol_key(s)}
+
+    # Phase 1: Evict inactive / unsubscribed entries
+    inactive_keys = [k for k in _FYERS_WS_TICKS if k not in active_keys]
+    for k in inactive_keys:
         _FYERS_WS_TICKS.pop(k, None)
 
-    # Phase 2: If still above capacity, evict oldest by tick timestamp
+    # Phase 2: If still above capacity, evict ONLY inactive entries ordered by timestamp (failsafe check)
     if len(_FYERS_WS_TICKS) > FYERS_WS_TICKS_MAX_KEYS:
-        excess = len(_FYERS_WS_TICKS) - FYERS_WS_TICKS_MAX_KEYS + 100
-        try:
-            sorted_keys = sorted(
-                _FYERS_WS_TICKS.keys(),
-                key=lambda k: safe_float((_FYERS_WS_TICKS.get(k) or {}).get("ts"), 0)
+        remaining_inactive = [k for k in _FYERS_WS_TICKS if k not in active_keys]
+        if remaining_inactive:
+            try:
+                sorted_inactive = sorted(
+                    remaining_inactive,
+                    key=lambda k: safe_float((_FYERS_WS_TICKS.get(k) or {}).get("ts"), 0)
+                )
+                excess = len(_FYERS_WS_TICKS) - FYERS_WS_TICKS_MAX_KEYS
+                for k in sorted_inactive[:excess]:
+                    _FYERS_WS_TICKS.pop(k, None)
+            except Exception:
+                pass
+
+    # Phase 3: If active entries alone exceed capacity, preserve all active symbols and log throttled warning
+    if len(_FYERS_WS_TICKS) > FYERS_WS_TICKS_MAX_KEYS:
+        now = time.time()
+        if (now - _LAST_FYERS_WS_TICKS_CAPACITY_WARN) > 60.0:
+            _LAST_FYERS_WS_TICKS_CAPACITY_WARN = now
+            print(
+                f"[FyersWsTicks] Active WebSocket subscriptions ({len(_FYERS_WS_TICKS)}) exceed "
+                f"configured capacity ({FYERS_WS_TICKS_MAX_KEYS}). Preserving all active symbols."
             )
-            for k in sorted_keys[:excess]:
-                _FYERS_WS_TICKS.pop(k, None)
-        except Exception:
-            pass
 
 
 def _prune_prev_tick_volumes_locked():
-    """Ensure _PREV_TICK_VOLUMES remains bounded without losing active tracking."""
+    """Ensure _PREV_TICK_VOLUMES remains bounded without losing active tracking.
+    Protects both original and normalized symbol keys in all eviction phases.
+    Never evicts active subscribed symbols, even if active subscriptions exceed capacity.
+    """
+    global _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN
     if len(_PREV_TICK_VOLUMES) <= PREV_TICK_VOLUMES_MAX_KEYS:
         return
-    active_set = _FYERS_WS_SYMBOLS
-    stale_keys = [k for k in _PREV_TICK_VOLUMES if k not in active_set]
-    for k in stale_keys:
+
+    active_keys = {s for s in _FYERS_WS_SYMBOLS if s} | {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS if s and normalize_symbol_key(s)}
+
+    # Phase 1: Evict inactive / unsubscribed entries
+    inactive_keys = [k for k in _PREV_TICK_VOLUMES if k not in active_keys]
+    for k in inactive_keys:
         _PREV_TICK_VOLUMES.pop(k, None)
+
+    # Phase 2: If still above capacity, evict ONLY inactive entries (never evict active symbols)
     if len(_PREV_TICK_VOLUMES) > PREV_TICK_VOLUMES_MAX_KEYS:
-        excess = len(_PREV_TICK_VOLUMES) - PREV_TICK_VOLUMES_MAX_KEYS + 100
-        for k in list(_PREV_TICK_VOLUMES.keys())[:excess]:
-            _PREV_TICK_VOLUMES.pop(k, None)
+        remaining_inactive = [k for k in _PREV_TICK_VOLUMES if k not in active_keys]
+        if remaining_inactive:
+            excess = len(_PREV_TICK_VOLUMES) - PREV_TICK_VOLUMES_MAX_KEYS
+            for k in remaining_inactive[:excess]:
+                _PREV_TICK_VOLUMES.pop(k, None)
+
+    # Phase 3: If active entries alone exceed capacity, preserve all active entries and log throttled warning
+    if len(_PREV_TICK_VOLUMES) > PREV_TICK_VOLUMES_MAX_KEYS:
+        now = time.time()
+        if (now - _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN) > 60.0:
+            _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = now
+            print(
+                f"[PrevTickVolumes] Active WebSocket subscriptions ({len(_PREV_TICK_VOLUMES)}) exceed "
+                f"configured capacity ({PREV_TICK_VOLUMES_MAX_KEYS}). Preserving all active tracking."
+            )
 
 
 def on_fyers_ws_message(message):
@@ -2610,12 +2653,14 @@ def reset_fyers_ws_stream():
 
     with _FYERS_WS_LOCK:
         socket = _FYERS_WS_SOCKET
-        global _ACTIVE_WS_SYMBOLS_SNAPSHOT
+        global _ACTIVE_WS_SYMBOLS_SNAPSHOT, _LAST_FYERS_WS_TICKS_CAPACITY_WARN, _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN
         _FYERS_WS_SOCKET = None
         _FYERS_WS_SYMBOLS.clear()
         _ACTIVE_WS_SYMBOLS_SNAPSHOT = frozenset()
         _FYERS_WS_TICKS.clear()
         _PREV_TICK_VOLUMES.clear()
+        _LAST_FYERS_WS_TICKS_CAPACITY_WARN = 0.0
+        _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = 0.0
         _FYERS_WS_STATUS.update({
             "connected": False,
             "started": False,
