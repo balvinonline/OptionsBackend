@@ -1303,6 +1303,8 @@ MARKET_STRIP_SYMBOLS = {
     "NIFTY MIDCAP 100": "NSE:NIFTYMIDCAP100-INDEX",
     "NIFTY SMALLCAP 100": "NSE:NIFTYSMLCAP100-INDEX",
     "NIFTY FIN SERVICE": "NSE:FINNIFTY-INDEX",
+    "MIDCAP SELECT": "NSE:MIDCPNIFTY-INDEX",
+    "BSE BANKEX": "BSE:BANKEX-INDEX",
 }
 
 SECTOR_INDEX_SYMBOLS = {
@@ -2070,8 +2072,12 @@ def get_intraday_history_snapshot(symbol_key, price=None):
     try:
         history = fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=900)
         if not isinstance(history, dict) or not history.get("ok"):
+            history = fetch_yahoo_history(symbol_key, resolution="5")
+        if not isinstance(history, dict) or not history.get("ok"):
             return {}
         candles = history.get("candles") or []
+        if not candles:
+            return {}
         # V2.0.20M1: retain the first real candle open for today's IST session.
         # Quote feeds can occasionally omit `open`; gap safety must not silently disappear.
         today = ist_now().date()
@@ -2087,18 +2093,53 @@ def get_intraday_history_snapshot(symbol_key, price=None):
                     today_rows.append(row)
             except Exception:
                 continue
+
+        # If no rows for today (e.g. weekend, holiday, off-market hours), use rows from the last active trading session
+        latest_date = None
+        if not today_rows:
+            try:
+                latest_ts = safe_int(candles[-1].get("ts"), None)
+                if latest_ts:
+                    latest_date = datetime.fromtimestamp(latest_ts, IST).date()
+                    today_rows = [
+                        row for row in candles
+                        if isinstance(row, dict) and safe_int(row.get("ts"), None) and
+                        datetime.fromtimestamp(safe_int(row.get("ts")), IST).date() == latest_date
+                    ]
+            except Exception:
+                pass
+
+        session_target_date = latest_date if latest_date else today
+        prior_rows = [
+            row for row in candles
+            if isinstance(row, dict) and safe_int(row.get("ts"), None) and
+            datetime.fromtimestamp(safe_int(row.get("ts")), IST).date() < session_target_date
+        ]
+        prev_close = safe_float(prior_rows[-1].get("close"), None) if prior_rows else None
+
         today_open = safe_float(today_rows[0].get("open"), None) if today_rows else None
-        vwap = compute_session_vwap(candles)
-        volume_snapshot = compute_session_volume_snapshot(candles)
+        today_high = max((safe_float(r.get("high"), 0) for r in today_rows), default=None) if today_rows else None
+        today_low = min((safe_float(r.get("low"), 999999999) for r in today_rows), default=None) if today_rows else None
+        vwap = compute_session_vwap(today_rows if today_rows else candles)
+        volume_snapshot = compute_session_volume_snapshot(today_rows if today_rows else candles)
         latest = candles[-1] if candles else {}
         latest_close = safe_float(latest.get("close"), None) if isinstance(latest, dict) else None
         ref_price = price if price is not None else latest_close
+
+        change = round2(latest_close - prev_close) if (latest_close is not None and prev_close not in (None, 0)) else None
+        change_pct = round2(((latest_close - prev_close) / prev_close) * 100) if (latest_close is not None and prev_close not in (None, 0)) else None
+
         return {
             "ltp": latest_close,
             "todayOpen": round2(today_open),
+            "high": round2(today_high),
+            "low": round2(today_low),
+            "prev_close": round2(prev_close),
+            "change": change,
+            "change_pct": change_pct,
             "vwap": clean_vwap_for_price(vwap, ref_price, max_distance_pct=2.25),
             **volume_snapshot,
-            "source": "history_5m",
+            "source": history.get("source", "history_5m"),
         }
     except Exception as e:
         print(f"intraday history snapshot error {symbol_key}: {e}")
@@ -7668,6 +7709,19 @@ def get_fast_home_live_snapshot():
     market_strip = build_market_strip_from_quotes(quotes, stamp)
     vix_raw = quotes.get(VIX_SYMBOL) or quotes.get(normalize_symbol_key(VIX_SYMBOL)) or {}
     vix = extract_quote_metrics(vix_raw)
+    if safe_float(vix.get("ltp"), None) is None:
+        vix_snap = get_intraday_history_snapshot("INDIAVIX")
+        if safe_float(vix_snap.get("ltp"), None) is not None:
+            vix = {
+                "ltp": vix_snap.get("ltp"),
+                "change": vix_snap.get("change"),
+                "change_pct": vix_snap.get("change_pct"),
+                "prev_close": vix_snap.get("prev_close"),
+                "open": vix_snap.get("todayOpen"),
+                "high": vix_snap.get("high"),
+                "low": vix_snap.get("low"),
+                "source": "history_snapshot",
+            }
     sectors = build_sector_strength_from_quotes(quotes)
     fo = get_cached("fo_breadth", ttl=120) or get_stale_cached("fo_breadth") or {}
     cooldown_seconds = max(0, int(_QUOTE_COOLDOWN_UNTIL - time.time()))
@@ -7790,7 +7844,8 @@ def get_previous_day_levels(symbol, fallback_symbol=None, cache_key=None, cache_
         "close": None,
     }
 
-    if not fyers:
+    active_client = get_request_fyers_client()
+    if not (active_client or fyers):
         return result
 
     symbols_to_try = unique_symbols([symbol, fallback_symbol])
@@ -8047,22 +8102,31 @@ def build_home_index_quote_card(symbol_key):
 
 
 def strip_labels_for_symbol(symbol_key):
-    cfg = INDEX_MAP[symbol_key]
+    cfg = INDEX_MAP.get(symbol_key, {})
     labels = [cfg.get("label", ""), symbol_key]
     if symbol_key == "BANKNIFTY":
         labels.extend(["NIFTY BANK", "BANKNIFTY", "BANK NIFTY"])
     elif symbol_key == "NIFTY":
         labels.extend(["NIFTY 50", "NIFTY"])
+    elif symbol_key == "SENSEX":
+        labels.extend(["BSE SENSEX", "SENSEX"])
+    elif symbol_key == "FINNIFTY":
+        labels.extend(["NIFTY FIN SERVICE", "FINNIFTY", "FIN NIFTY"])
+    elif symbol_key == "MIDCPNIFTY":
+        labels.extend(["NIFTY MID SELECT", "MIDCAP SELECT", "MIDCPNIFTY", "MIDCAP NIFTY"])
+    elif symbol_key == "BANKEX":
+        labels.extend(["BSE BANKEX", "BANKEX"])
     return {str(label or "").strip().upper() for label in labels if label}
 
 
 def build_fast_home_index_quote_card(symbol_key, market_strip=None, previous_card=None, future_quote=None):
-    cfg = INDEX_MAP[symbol_key]
+    cfg = INDEX_MAP.get(symbol_key, {})
     previous_card = previous_card or {}
     previous_spot = previous_card.get("spot", {}) if isinstance(previous_card, dict) else {}
     previous_future = previous_card.get("future", {}) if isinstance(previous_card, dict) else {}
+    fut_sym = cfg.get("future")
     future_metrics = extract_quote_metrics(
-        future_quote if future_quote is not None else get_quote_block(cfg["future"])
+        future_quote if future_quote is not None else (get_quote_block(fut_sym) if fut_sym else {})
     )
 
     labels = strip_labels_for_symbol(symbol_key)
@@ -8090,6 +8154,18 @@ def build_fast_home_index_quote_card(symbol_key, market_strip=None, previous_car
         spot["ltp"] = round2(history_ltp)
         spot["source"] = "history_5m"
         spot_ltp = history_ltp
+    if safe_float(spot.get("prev_close"), None) is None and history_snapshot.get("prev_close") is not None:
+        spot["prev_close"] = round2(history_snapshot.get("prev_close"))
+    if safe_float(spot.get("change"), None) is None and history_snapshot.get("change") is not None:
+        spot["change"] = round2(history_snapshot.get("change"))
+    if safe_float(spot.get("change_pct"), None) is None and history_snapshot.get("change_pct") is not None:
+        spot["change_pct"] = round2(history_snapshot.get("change_pct"))
+    if safe_float(spot.get("open"), None) is None and history_snapshot.get("todayOpen") is not None:
+        spot["open"] = round2(history_snapshot.get("todayOpen"))
+    if safe_float(spot.get("high"), None) is None and history_snapshot.get("high") is not None:
+        spot["high"] = round2(history_snapshot.get("high"))
+    if safe_float(spot.get("low"), None) is None and history_snapshot.get("low") is not None:
+        spot["low"] = round2(history_snapshot.get("low"))
     if future_ltp is None and history_ltp is not None:
         future_ltp = history_ltp
     future_vwap = clean_vwap_for_price(future_metrics.get("vwap"), future_ltp or spot_ltp)
@@ -8384,9 +8460,21 @@ def build_home_dashboard():
     previous_indices = previous_quote_payload.get("indices", {}) if isinstance(previous_quote_payload, dict) else {}
     future_quotes = current_index_future_quotes()
 
-    nifty_card = build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get(INDEX_MAP["NIFTY"]["future"]))
-    banknifty_card = build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get(INDEX_MAP["BANKNIFTY"]["future"]))
-    sensex_card = build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get(INDEX_MAP["SENSEX"]["future"]))
+    nifty_card = build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get((INDEX_MAP.get("NIFTY") or {}).get("future")))
+    banknifty_card = build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get((INDEX_MAP.get("BANKNIFTY") or {}).get("future")))
+    sensex_card = build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get((INDEX_MAP.get("SENSEX") or {}).get("future")))
+    finnifty_card = build_fast_home_index_quote_card("FINNIFTY", market_strip, previous_indices.get("FINNIFTY"), future_quotes.get((INDEX_MAP.get("FINNIFTY") or {}).get("future")))
+    midcpnifty_card = build_fast_home_index_quote_card("MIDCPNIFTY", market_strip, previous_indices.get("MIDCPNIFTY"), future_quotes.get((INDEX_MAP.get("MIDCPNIFTY") or {}).get("future")))
+    bankex_card = build_fast_home_index_quote_card("BANKEX", market_strip, previous_indices.get("BANKEX"), future_quotes.get((INDEX_MAP.get("BANKEX") or {}).get("future")))
+
+    indices_cards = {
+        "NIFTY": nifty_card,
+        "BANKNIFTY": banknifty_card,
+        "SENSEX": sensex_card,
+        "FINNIFTY": finnifty_card,
+        "MIDCPNIFTY": midcpnifty_card,
+        "BANKEX": bankex_card,
+    }
 
     vix = live_snapshot.get("vix", {})
     sectors = live_snapshot.get("sectorStrength", [])
@@ -8413,21 +8501,13 @@ def build_home_dashboard():
     home_breadth_stats = build_breadth_stats(ad_map.get("NIFTY", {}), sectors)
     set_cached("home_index_quotes", {
         "timestamp": timestamp,
-        "indices": {
-            "NIFTY": nifty_card,
-            "BANKNIFTY": banknifty_card,
-            "SENSEX": sensex_card,
-        },
+        "indices": indices_cards,
     })
 
     result = {
         "timestamp": timestamp,
         "marketStrip": market_strip,
-        "indices": {
-            "NIFTY": nifty_card,
-            "BANKNIFTY": banknifty_card,
-            "SENSEX": sensex_card,
-        },
+        "indices": indices_cards,
         "vix": vix,
         "sectorStrength": sectors,
         "foBreadth": fo,
@@ -9251,9 +9331,12 @@ def home_ticker():
         previous_indices = previous_quote_payload.get("indices", {}) if isinstance(previous_quote_payload, dict) else {}
         future_quotes = current_index_future_quotes()
         indices = {
-            "NIFTY": build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get(INDEX_MAP["NIFTY"]["future"])),
-            "BANKNIFTY": build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get(INDEX_MAP["BANKNIFTY"]["future"])),
-            "SENSEX": build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get(INDEX_MAP["SENSEX"]["future"])),
+            "NIFTY": build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get((INDEX_MAP.get("NIFTY") or {}).get("future"))),
+            "BANKNIFTY": build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get((INDEX_MAP.get("BANKNIFTY") or {}).get("future"))),
+            "SENSEX": build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get((INDEX_MAP.get("SENSEX") or {}).get("future"))),
+            "FINNIFTY": build_fast_home_index_quote_card("FINNIFTY", market_strip, previous_indices.get("FINNIFTY"), future_quotes.get((INDEX_MAP.get("FINNIFTY") or {}).get("future"))),
+            "MIDCPNIFTY": build_fast_home_index_quote_card("MIDCPNIFTY", market_strip, previous_indices.get("MIDCPNIFTY"), future_quotes.get((INDEX_MAP.get("MIDCPNIFTY") or {}).get("future"))),
+            "BANKEX": build_fast_home_index_quote_card("BANKEX", market_strip, previous_indices.get("BANKEX"), future_quotes.get((INDEX_MAP.get("BANKEX") or {}).get("future"))),
         }
         set_cached("home_index_quotes", {
             "timestamp": live_snapshot.get("timestamp") or datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
@@ -9268,7 +9351,17 @@ def home_ticker():
             "BANKNIFTY": advance_decline_snapshot("BANKNIFTY"),
             "SENSEX": advance_decline_snapshot("SENSEX"),
         }
-        market_mood = compute_home_market_mood(indices, vix, sectors, ad_map, fo)
+        market_mood = compute_home_market_mood(
+            {
+                "NIFTY": indices["NIFTY"],
+                "BANKNIFTY": indices["BANKNIFTY"],
+                "SENSEX": indices["SENSEX"],
+            },
+            vix,
+            sectors,
+            ad_map,
+            fo,
+        )
         return jsonify({
             "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
             "marketStrip": market_strip,
@@ -9304,13 +9397,18 @@ def home_index_quotes():
         previous_indices = previous_quote_payload.get("indices", {}) if isinstance(previous_quote_payload, dict) else {}
         future_quotes = current_index_future_quotes()
 
+        indices = {
+            "NIFTY": build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get((INDEX_MAP.get("NIFTY") or {}).get("future"))),
+            "BANKNIFTY": build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get((INDEX_MAP.get("BANKNIFTY") or {}).get("future"))),
+            "SENSEX": build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get((INDEX_MAP.get("SENSEX") or {}).get("future"))),
+            "FINNIFTY": build_fast_home_index_quote_card("FINNIFTY", market_strip, previous_indices.get("FINNIFTY"), future_quotes.get((INDEX_MAP.get("FINNIFTY") or {}).get("future"))),
+            "MIDCPNIFTY": build_fast_home_index_quote_card("MIDCPNIFTY", market_strip, previous_indices.get("MIDCPNIFTY"), future_quotes.get((INDEX_MAP.get("MIDCPNIFTY") or {}).get("future"))),
+            "BANKEX": build_fast_home_index_quote_card("BANKEX", market_strip, previous_indices.get("BANKEX"), future_quotes.get((INDEX_MAP.get("BANKEX") or {}).get("future"))),
+        }
+
         result = {
             "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
-            "indices": {
-                "NIFTY": build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get(INDEX_MAP["NIFTY"]["future"])),
-                "BANKNIFTY": build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get(INDEX_MAP["BANKNIFTY"]["future"])),
-                "SENSEX": build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get(INDEX_MAP["SENSEX"]["future"])),
-            }
+            "indices": indices
         }
 
         set_cached("home_index_quotes", result)
