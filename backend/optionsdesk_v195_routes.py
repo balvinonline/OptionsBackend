@@ -1280,7 +1280,7 @@ def register_optionsdesk_v195_routes(app):
     @app.route("/api/kotakneo/order", methods=["POST"])
     @_require_mobile_auth
     def kotakneo_order():
-        global _DAILY_ORDER_COUNT
+        global _DAILY_ORDER_COUNT, _KOTAK_CLIENT, _KOTAK_SESSION_READY
         client_order_id = ""
         try:
             config = _kotak_config()
