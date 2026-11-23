@@ -64,6 +64,11 @@ def _save_kotak_session(client, session_at: str):
             "sessionAt": session_at,
             "edit_token": getattr(cfg, "edit_token", None),
             "edit_sid": getattr(cfg, "edit_sid", None),
+            "edit_rid": getattr(cfg, "edit_rid", None),
+            "data_center": getattr(cfg, "data_center", None),
+            "base_url": getattr(cfg, "base_url", None),
+            "feed_url": getattr(cfg, "feed_url", None),
+            "rt_url": getattr(cfg, "rt_url", None),
             "view_token": getattr(cfg, "view_token", None),
             "bearer_token": getattr(cfg, "bearer_token", None),
             "sid": getattr(cfg, "sid", None),
@@ -115,11 +120,21 @@ def _restore_kotak_session():
         cfg = client.configuration
         cfg.edit_token = edit_token
         cfg.edit_sid = edit_sid
+        cfg.edit_rid = data.get("edit_rid")
+        cfg.data_center = data.get("data_center")
+        cfg.base_url = data.get("base_url")
+        cfg.feed_url = data.get("feed_url")
+        cfg.rt_url = data.get("rt_url")
         cfg.view_token = data.get("view_token")
         cfg.bearer_token = data.get("bearer_token")
         cfg.sid = data.get("sid")
         cfg.ucc = data.get("ucc")
         cfg.userId = data.get("userId")
+        if hasattr(cfg, "resolve_dynamic_urls") and hasattr(client, "rest_client"):
+            try:
+                cfg.resolve_dynamic_urls(client.rest_client)
+            except Exception:
+                pass
 
         _KOTAK_CLIENT = client
         _KOTAK_SESSION_READY = True
@@ -1406,27 +1421,21 @@ def register_optionsdesk_v195_routes(app):
                 _RECENT_ORDER_IDS.pop(client_order_id, None)
                 low_err = str(err_val or resp_dict.get("message") or "").lower()
                 if st_code == 100008 or "100008" in low_err or "unauthorized" in low_err:
-                    _KOTAK_SESSION_READY = False
-                    _KOTAK_CLIENT = None
-                    for path in (_SESSION_CACHE_FILE, _LOCAL_SESSION_CACHE_FILE):
-                        try:
-                            if os.path.exists(path):
-                                os.remove(path)
-                        except Exception:
-                            pass
-                    cur_ip = _outbound_ip() or "74.220.48.166"
+                    cur_ip = _outbound_ip() or "74.220.48.179"
                     err_msg = (
-                        f"Kotak Neo rejected order (Error 100008: Unauthorized). "
-                        f"Your session has expired. Please open Broker Connections and start a fresh live session with today's TOTP + MPIN."
+                        f"Kotak Neo rejected order (Error 100008: Unauthorized IP). "
+                        f"Your live session is active, but Kotak Neo requires outbound server IP {cur_ip} to be whitelisted. "
+                        f"Please open trade.kotakneo.com/trade-api and add {cur_ip} to your application's Whitelisted IPs."
                     )
                     return jsonify({
                         "ok": False,
                         "status": "REJECTED",
                         "error": err_msg,
                         "stCode": 100008,
-                        "sessionExpired": True,
+                        "sessionExpired": False,
+                        "outboundIp": cur_ip,
                         "data": _sanitize_for_json(resp_dict)
-                    }), 401
+                    }), 400
                 else:
                     err_msg = str(err_val or resp_dict.get("message") or "Kotak Neo rejected the order")
                 return jsonify({"ok": False, "error": err_msg, "data": _sanitize_for_json(resp_dict)}), 400
