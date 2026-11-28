@@ -14,6 +14,8 @@ import xml.etree.ElementTree as ET
 import socket
 import sqlite3
 import secrets
+import hmac
+from functools import wraps
 import werkzeug.security
 import gc
 import math
@@ -75,8 +77,95 @@ load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 dist_folder = Path(__file__).resolve().parent.parent / "dist"
 app = Flask(__name__, static_folder=str(dist_folder), static_url_path='/')
-app.config["SECRET_KEY"] = "super-secret-dashboard-key"
-CORS(app)
+flask_secret = os.getenv("FLASK_SECRET_KEY", "").strip()
+is_production = (
+    os.getenv("RENDER", "").lower() in {"true", "1"} or
+    os.getenv("FLASK_ENV") == "production"
+)
+
+if not flask_secret:
+    if is_production:
+        raise RuntimeError(
+            "FATAL: FLASK_SECRET_KEY environment variable is not configured. "
+            "Refusing to start production backend with missing session secret."
+        )
+    else:
+        flask_secret = secrets.token_hex(32)
+        print("⚠️ Warning: FLASK_SECRET_KEY not set. Using ephemeral development key.")
+
+app.config["SECRET_KEY"] = flask_secret
+
+ALLOWED_ORIGINS = [
+    # 1. Production Render Backend (Same-Origin / Direct)
+    "https://optionsbackend.onrender.com",
+
+    # 2. Capacitor Android Native Application (Configured via androidScheme: "https")
+    "https://localhost",
+
+    # 3. Native WebView Fallbacks
+    "capacitor://localhost",
+    "http://localhost",
+
+    # 4. Local Desktop Development Servers (Vite & Localhost)
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+CORS(
+    app,
+    origins=ALLOWED_ORIGINS,
+    supports_credentials=True,
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Admin-Key",
+        "X-API-Key",
+        "x-fyers-token"
+    ],
+    methods=["GET", "POST", "OPTIONS"]
+)
+
+def require_admin_key(f):
+    """
+    Decorator enforcing administrative authentication for privileged endpoints.
+    Requires an administrative secret matching the server's ADMIN_API_KEY environment variable.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        expected_key = os.getenv("ADMIN_API_KEY", "").strip()
+        
+        # 1. Fail-Closed: If ADMIN_API_KEY is not configured on the server, reject all calls
+        if not expected_key:
+            return jsonify({
+                "ok": False,
+                "error": "Administrative interface is not configured on this server."
+            }), 503
+
+        # 2. Extract key from incoming headers (supporting standard admin headers)
+        provided_key = (
+            request.headers.get("X-Admin-Key") or
+            request.headers.get("X-API-Key") or
+            ""
+        ).strip()
+
+        # Alternative: Authorization: Bearer <ADMIN_API_KEY>
+        auth_header = request.headers.get("Authorization", "").strip()
+        if not provided_key and auth_header.startswith("Bearer "):
+            provided_key = auth_header.split(" ", 1)[1].strip()
+
+        # 3. Constant-time comparison to prevent timing side-channel attacks
+        if not provided_key or not hmac.compare_digest(provided_key, expected_key):
+            return jsonify({
+                "ok": False,
+                "error": "Unauthorized: Invalid or missing administrative key."
+            }), 401
+
+        return f(*args, **kwargs)
+    return decorated_function
 
 if Compress is not None:
     app.config["COMPRESS_MIMETYPES"] = [
@@ -114,7 +203,7 @@ def serve_react(path):
 from flask_socketio import SocketIO, emit, join_room, leave_room
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
+    cors_allowed_origins=ALLOWED_ORIGINS,
     path="/api/socket.io",
     ping_timeout=10,
     ping_interval=5,
@@ -130,13 +219,29 @@ def gc_worker():
 
 threading.Thread(target=gc_worker, daemon=True).start()
 
+def _is_known_api_path(path):
+    for rule in app.url_map.iter_rules():
+        if rule.rule == path:
+            return True
+    return False
+
 @app.errorhandler(404)
 def not_found(e):
     if request.path.startswith('/api/'):
+        if _is_known_api_path(request.path):
+            return jsonify({"error": "Method not allowed"}), 405
         return jsonify({"error": "Not found"}), 404
     if dist_folder.exists():
         return app.send_static_file('index.html')
     return "Frontend not built yet", 404
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    if request.path.startswith('/api/'):
+        if not _is_known_api_path(request.path):
+            return jsonify({"error": "Not found"}), 404
+        return jsonify({"error": "Method not allowed"}), 405
+    return e
 
 @app.route('/')
 def index():
@@ -1075,7 +1180,8 @@ def refresh_fyers_from_env(force=False):
     return fyers
 
 def clear_live_market_caches():
-    _QUOTE_CACHE.clear()
+    with _QUOTE_CACHE_LOCK:
+        _QUOTE_CACHE.clear()
     _MARKET_STRIP_CACHE["ts"] = 0.0
     _MARKET_STRIP_CACHE["items"] = []
     for bucket in ["home_index_quotes", "home_index_analytics", "home_dashboard", "sector_strength"]:
@@ -1216,6 +1322,8 @@ MARKET_STRIP_SYMBOLS = {
     "NIFTY MIDCAP 100": "NSE:NIFTYMIDCAP100-INDEX",
     "NIFTY SMALLCAP 100": "NSE:NIFTYSMLCAP100-INDEX",
     "NIFTY FIN SERVICE": "NSE:FINNIFTY-INDEX",
+    "MIDCAP SELECT": "NSE:MIDCPNIFTY-INDEX",
+    "BSE BANKEX": "BSE:BANKEX-INDEX",
 }
 
 SECTOR_INDEX_SYMBOLS = {
@@ -1697,6 +1805,11 @@ _MARKET_STRIP_CACHE = {
     "items": []
 }
 _QUOTE_CACHE = {}
+_QUOTE_CACHE_LOCK = threading.RLock()
+QUOTE_CACHE_MAX_KEYS = 5000
+FYERS_WS_TICKS_MAX_KEYS = 2000
+PREV_TICK_VOLUMES_MAX_KEYS = 1500
+_ACTIVE_WS_SYMBOLS_SNAPSHOT = frozenset()
 _QUOTE_COOLDOWN_UNTIL = 0.0
 QUOTE_CACHE_TTL = 4
 QUOTE_STALE_TTL = 180
@@ -1747,7 +1860,7 @@ def background_future_oi_updater():
                                 _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
                                 break
                             
-                            if resp and resp.get("s") == "error" and resp.get("code") in (-300, 401, 403, 429):
+                            if resp and resp.get("s") == "error" and safe_int(resp.get("code"), None) in (-360, -300, 401, 403, 429):
                                 _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
                                 break
                                 
@@ -2054,8 +2167,12 @@ def get_intraday_history_snapshot(symbol_key, price=None):
     try:
         history = fetch_fyers_history(symbol_key, resolution="5", lookback_minutes=900)
         if not isinstance(history, dict) or not history.get("ok"):
+            history = fetch_yahoo_history(symbol_key, resolution="5")
+        if not isinstance(history, dict) or not history.get("ok"):
             return {}
         candles = history.get("candles") or []
+        if not candles:
+            return {}
         # V2.0.20M1: retain the first real candle open for today's IST session.
         # Quote feeds can occasionally omit `open`; gap safety must not silently disappear.
         today = ist_now().date()
@@ -2071,18 +2188,53 @@ def get_intraday_history_snapshot(symbol_key, price=None):
                     today_rows.append(row)
             except Exception:
                 continue
+
+        # If no rows for today (e.g. weekend, holiday, off-market hours), use rows from the last active trading session
+        latest_date = None
+        if not today_rows:
+            try:
+                latest_ts = safe_int(candles[-1].get("ts"), None)
+                if latest_ts:
+                    latest_date = datetime.fromtimestamp(latest_ts, IST).date()
+                    today_rows = [
+                        row for row in candles
+                        if isinstance(row, dict) and safe_int(row.get("ts"), None) and
+                        datetime.fromtimestamp(safe_int(row.get("ts")), IST).date() == latest_date
+                    ]
+            except Exception:
+                pass
+
+        session_target_date = latest_date if latest_date else today
+        prior_rows = [
+            row for row in candles
+            if isinstance(row, dict) and safe_int(row.get("ts"), None) and
+            datetime.fromtimestamp(safe_int(row.get("ts")), IST).date() < session_target_date
+        ]
+        prev_close = safe_float(prior_rows[-1].get("close"), None) if prior_rows else None
+
         today_open = safe_float(today_rows[0].get("open"), None) if today_rows else None
-        vwap = compute_session_vwap(candles)
-        volume_snapshot = compute_session_volume_snapshot(candles)
+        today_high = max((safe_float(r.get("high"), 0) for r in today_rows), default=None) if today_rows else None
+        today_low = min((safe_float(r.get("low"), 999999999) for r in today_rows), default=None) if today_rows else None
+        vwap = compute_session_vwap(today_rows if today_rows else candles)
+        volume_snapshot = compute_session_volume_snapshot(today_rows if today_rows else candles)
         latest = candles[-1] if candles else {}
         latest_close = safe_float(latest.get("close"), None) if isinstance(latest, dict) else None
         ref_price = price if price is not None else latest_close
+
+        change = round2(latest_close - prev_close) if (latest_close is not None and prev_close not in (None, 0)) else None
+        change_pct = round2(((latest_close - prev_close) / prev_close) * 100) if (latest_close is not None and prev_close not in (None, 0)) else None
+
         return {
             "ltp": latest_close,
             "todayOpen": round2(today_open),
+            "high": round2(today_high),
+            "low": round2(today_low),
+            "prev_close": round2(prev_close),
+            "change": change,
+            "change_pct": change_pct,
             "vwap": clean_vwap_for_price(vwap, ref_price, max_distance_pct=2.25),
             **volume_snapshot,
-            "source": "history_5m",
+            "source": history.get("source", "history_5m"),
         }
     except Exception as e:
         print(f"intraday history snapshot error {symbol_key}: {e}")
@@ -2246,7 +2398,16 @@ def build_trade_zones(spot, future, analytics, chain, history_snapshot=None):
 def quote_response_rate_limited(resp):
     if not isinstance(resp, dict):
         return False
-    return safe_int(resp.get("code"), None) == 429
+    code = safe_int(resp.get("code"), None)
+    if code in (429, -360):
+        return True
+    status_code = safe_int(resp.get("status"), None) or safe_int(resp.get("http_code"), None)
+    if status_code in (429, -360):
+        return True
+    msg = str(resp.get("message") or resp.get("error") or "").lower()
+    if "too many requests" in msg or "rate limit" in msg:
+        return True
+    return False
 
 
 def quote_block_has_value(block):
@@ -2258,13 +2419,73 @@ def quote_block_has_value(block):
     )
 
 
+_LAST_QUOTE_CACHE_CAPACITY_WARN = 0.0
+
+
+def _prune_quote_cache_locked(now):
+    """Ensure _QUOTE_CACHE remains bounded with thread-safe expiry and LRU eviction.
+    Active instruments receiving live updates have fresh timestamps and are never evicted.
+    All symbols currently subscribed on WebSocket are explicitly protected from eviction in ALL phases.
+    """
+    global _LAST_QUOTE_CACHE_CAPACITY_WARN
+    if len(_QUOTE_CACHE) <= QUOTE_CACHE_MAX_KEYS:
+        return
+
+    protected_keys = _ACTIVE_WS_SYMBOLS_SNAPSHOT
+
+    # Phase 1: Evict stale items older than QUOTE_STALE_TTL (180s) that are NOT active subscriptions
+    stale_keys = [
+        k for k, v in _QUOTE_CACHE.items()
+        if (now - (v or {}).get("ts", 0)) > QUOTE_STALE_TTL and k not in protected_keys
+    ]
+    for k in stale_keys:
+        _QUOTE_CACHE.pop(k, None)
+
+    # Phase 2: If still above capacity, evict non-active items first via LRU
+    if len(_QUOTE_CACHE) > QUOTE_CACHE_MAX_KEYS:
+        unprotected_sorted = sorted(
+            [k for k in _QUOTE_CACHE if k not in protected_keys],
+            key=lambda k: (_QUOTE_CACHE.get(k) or {}).get("ts", 0)
+        )
+        excess = len(_QUOTE_CACHE) - QUOTE_CACHE_MAX_KEYS
+        for k in unprotected_sorted[:excess]:
+            _QUOTE_CACHE.pop(k, None)
+
+    # Phase 3: Failsafe - never evict active WebSocket subscriptions in any phase.
+    # If active subscriptions alone exceed capacity, preserve all of them and report the alert.
+    if len(_QUOTE_CACHE) > QUOTE_CACHE_MAX_KEYS:
+        # Purge any remaining unprotected keys regardless of age
+        remaining_unprotected = [k for k in _QUOTE_CACHE if k not in protected_keys]
+        for k in remaining_unprotected:
+            _QUOTE_CACHE.pop(k, None)
+            if len(_QUOTE_CACHE) <= QUOTE_CACHE_MAX_KEYS:
+                break
+
+        # If active subscriptions alone exceed QUOTE_CACHE_MAX_KEYS, preserve all active subscriptions
+        if len(_QUOTE_CACHE) > QUOTE_CACHE_MAX_KEYS and (now - _LAST_QUOTE_CACHE_CAPACITY_WARN > 60.0):
+            _LAST_QUOTE_CACHE_CAPACITY_WARN = now
+            print(
+                f"[QuoteCache] Active WebSocket subscriptions ({len(_QUOTE_CACHE)}) exceed "
+                f"configured capacity ({QUOTE_CACHE_MAX_KEYS}). Preserving all active subscriptions."
+            )
+
+
 def cache_quote_block(symbol, block):
     if not quote_block_has_value(block):
         return
     now = time.time()
-    for key in [symbol, normalize_symbol_key(symbol), normalize_symbol_key(block.get("symbol", ""))]:
-        if key:
-            _QUOTE_CACHE[key] = {"ts": now, "data": block}
+    keys_to_update = [k for k in [symbol, normalize_symbol_key(symbol), normalize_symbol_key(block.get("symbol", ""))] if k]
+    if not keys_to_update:
+        return
+    with _QUOTE_CACHE_LOCK:
+        for key in keys_to_update:
+            existing = (_QUOTE_CACHE.get(key) or {}).get("data") or {}
+            merged = {**existing}
+            for k, v in block.items():
+                if v is not None or k not in merged:
+                    merged[k] = v
+            _QUOTE_CACHE[key] = {"ts": now, "data": merged}
+        _prune_quote_cache_locked(now)
 
 
 def fyers_ws_access_token():
@@ -2424,6 +2645,87 @@ def normalize_ws_messages(message):
     }]
 
 
+_LAST_FYERS_WS_TICKS_CAPACITY_WARN = 0.0
+_LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = 0.0
+
+
+def _prune_fyers_ws_ticks_locked():
+    """Ensure _FYERS_WS_TICKS remains bounded without evicting active subscribed symbols.
+    Protects both original and normalized symbol keys in all eviction phases.
+    Never evicts an active subscribed symbol, even if active subscriptions exceed capacity.
+    """
+    global _LAST_FYERS_WS_TICKS_CAPACITY_WARN
+    if len(_FYERS_WS_TICKS) <= FYERS_WS_TICKS_MAX_KEYS:
+        return
+
+    active_keys = {s for s in _FYERS_WS_SYMBOLS if s} | {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS if s and normalize_symbol_key(s)}
+
+    # Phase 1: Evict inactive / unsubscribed entries
+    inactive_keys = [k for k in _FYERS_WS_TICKS if k not in active_keys]
+    for k in inactive_keys:
+        _FYERS_WS_TICKS.pop(k, None)
+
+    # Phase 2: If still above capacity, evict ONLY inactive entries ordered by timestamp (failsafe check)
+    if len(_FYERS_WS_TICKS) > FYERS_WS_TICKS_MAX_KEYS:
+        remaining_inactive = [k for k in _FYERS_WS_TICKS if k not in active_keys]
+        if remaining_inactive:
+            try:
+                sorted_inactive = sorted(
+                    remaining_inactive,
+                    key=lambda k: safe_float((_FYERS_WS_TICKS.get(k) or {}).get("ts"), 0)
+                )
+                excess = len(_FYERS_WS_TICKS) - FYERS_WS_TICKS_MAX_KEYS
+                for k in sorted_inactive[:excess]:
+                    _FYERS_WS_TICKS.pop(k, None)
+            except Exception:
+                pass
+
+    # Phase 3: If active entries alone exceed capacity, preserve all active symbols and log throttled warning
+    if len(_FYERS_WS_TICKS) > FYERS_WS_TICKS_MAX_KEYS:
+        now = time.time()
+        if (now - _LAST_FYERS_WS_TICKS_CAPACITY_WARN) > 60.0:
+            _LAST_FYERS_WS_TICKS_CAPACITY_WARN = now
+            print(
+                f"[FyersWsTicks] Active WebSocket subscriptions ({len(_FYERS_WS_TICKS)}) exceed "
+                f"configured capacity ({FYERS_WS_TICKS_MAX_KEYS}). Preserving all active symbols."
+            )
+
+
+def _prune_prev_tick_volumes_locked():
+    """Ensure _PREV_TICK_VOLUMES remains bounded without losing active tracking.
+    Protects both original and normalized symbol keys in all eviction phases.
+    Never evicts active subscribed symbols, even if active subscriptions exceed capacity.
+    """
+    global _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN
+    if len(_PREV_TICK_VOLUMES) <= PREV_TICK_VOLUMES_MAX_KEYS:
+        return
+
+    active_keys = {s for s in _FYERS_WS_SYMBOLS if s} | {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS if s and normalize_symbol_key(s)}
+
+    # Phase 1: Evict inactive / unsubscribed entries
+    inactive_keys = [k for k in _PREV_TICK_VOLUMES if k not in active_keys]
+    for k in inactive_keys:
+        _PREV_TICK_VOLUMES.pop(k, None)
+
+    # Phase 2: If still above capacity, evict ONLY inactive entries (never evict active symbols)
+    if len(_PREV_TICK_VOLUMES) > PREV_TICK_VOLUMES_MAX_KEYS:
+        remaining_inactive = [k for k in _PREV_TICK_VOLUMES if k not in active_keys]
+        if remaining_inactive:
+            excess = len(_PREV_TICK_VOLUMES) - PREV_TICK_VOLUMES_MAX_KEYS
+            for k in remaining_inactive[:excess]:
+                _PREV_TICK_VOLUMES.pop(k, None)
+
+    # Phase 3: If active entries alone exceed capacity, preserve all active entries and log throttled warning
+    if len(_PREV_TICK_VOLUMES) > PREV_TICK_VOLUMES_MAX_KEYS:
+        now = time.time()
+        if (now - _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN) > 60.0:
+            _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = now
+            print(
+                f"[PrevTickVolumes] Active WebSocket subscriptions ({len(_PREV_TICK_VOLUMES)}) exceed "
+                f"configured capacity ({PREV_TICK_VOLUMES_MAX_KEYS}). Preserving all active tracking."
+            )
+
+
 def on_fyers_ws_message(message):
     ticks = normalize_ws_messages(message)
     if not ticks:
@@ -2480,6 +2782,11 @@ def on_fyers_ws_message(message):
                 })
         _FYERS_WS_STATUS["connected"] = True
         _FYERS_WS_STATUS["updated_at"] = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+        _prune_fyers_ws_ticks_locked()
+        _prune_prev_tick_volumes_locked()
+
+
+
 
 
 def is_meaningful_tick(tick):
@@ -2491,9 +2798,14 @@ def reset_fyers_ws_stream():
 
     with _FYERS_WS_LOCK:
         socket = _FYERS_WS_SOCKET
+        global _ACTIVE_WS_SYMBOLS_SNAPSHOT, _LAST_FYERS_WS_TICKS_CAPACITY_WARN, _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN
         _FYERS_WS_SOCKET = None
         _FYERS_WS_SYMBOLS.clear()
+        _ACTIVE_WS_SYMBOLS_SNAPSHOT = frozenset()
         _FYERS_WS_TICKS.clear()
+        _PREV_TICK_VOLUMES.clear()
+        _LAST_FYERS_WS_TICKS_CAPACITY_WARN = 0.0
+        _LAST_PREV_TICK_VOLUMES_CAPACITY_WARN = 0.0
         _FYERS_WS_STATUS.update({
             "connected": False,
             "started": False,
@@ -2548,7 +2860,11 @@ def ensure_fyers_ws_stream(symbols):
 
     with _FYERS_WS_LOCK:
         missing = [symbol for symbol in symbols if symbol not in _FYERS_WS_SYMBOLS]
+        global _ACTIVE_WS_SYMBOLS_SNAPSHOT
         _FYERS_WS_SYMBOLS.update(symbols)
+        _ACTIVE_WS_SYMBOLS_SNAPSHOT = frozenset(
+            {normalize_symbol_key(s) for s in _FYERS_WS_SYMBOLS} | set(_FYERS_WS_SYMBOLS)
+        )
 
         if _FYERS_WS_SOCKET is not None:
             if missing:
@@ -2612,21 +2928,23 @@ def ensure_fyers_ws_stream(symbols):
 
 
 def get_cached_quote_block(symbol, ttl=QUOTE_CACHE_TTL):
-    item = _QUOTE_CACHE.get(symbol) or _QUOTE_CACHE.get(normalize_symbol_key(symbol))
-    if not item:
+    with _QUOTE_CACHE_LOCK:
+        item = _QUOTE_CACHE.get(symbol) or _QUOTE_CACHE.get(normalize_symbol_key(symbol))
+        if not item:
+            return {}
+        if time.time() - item.get("ts", 0) <= ttl:
+            return {**(item.get("data") or {})}
         return {}
-    if time.time() - item.get("ts", 0) <= ttl:
-        return item.get("data") or {}
-    return {}
 
 
 def get_stale_quote_block(symbol):
-    item = _QUOTE_CACHE.get(symbol) or _QUOTE_CACHE.get(normalize_symbol_key(symbol))
-    if not item:
+    with _QUOTE_CACHE_LOCK:
+        item = _QUOTE_CACHE.get(symbol) or _QUOTE_CACHE.get(normalize_symbol_key(symbol))
+        if not item:
+            return {}
+        if time.time() - item.get("ts", 0) <= QUOTE_STALE_TTL:
+            return {**(item.get("data") or {})}
         return {}
-    if time.time() - item.get("ts", 0) <= QUOTE_STALE_TTL:
-        return item.get("data") or {}
-    return {}
 
 
 def has_meaningful_number(value):
@@ -2692,6 +3010,9 @@ def get_quote_block(symbol):
             return block
     except Exception as e:
         print(f"quote error {symbol}: {e}")
+        err_msg = str(e).lower()
+        if "429" in err_msg or "-360" in err_msg or "rate limit" in err_msg:
+            _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
 
     return get_stale_quote_block(symbol)
 
@@ -2762,7 +3083,8 @@ def get_quotes_map(symbols, chunk_size=10, fallback_missing=True):
 
         except Exception as e:
             print(f"batch quote error for chunk {chunk}: {e}")
-            if "429" in str(e):
+            err_msg = str(e).lower()
+            if "429" in err_msg or "-360" in err_msg or "rate limit" in err_msg:
                 _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
                 break
 
@@ -7495,6 +7817,19 @@ def get_fast_home_live_snapshot():
     market_strip = build_market_strip_from_quotes(quotes, stamp)
     vix_raw = quotes.get(VIX_SYMBOL) or quotes.get(normalize_symbol_key(VIX_SYMBOL)) or {}
     vix = extract_quote_metrics(vix_raw)
+    if safe_float(vix.get("ltp"), None) is None:
+        vix_snap = get_intraday_history_snapshot("INDIAVIX")
+        if safe_float(vix_snap.get("ltp"), None) is not None:
+            vix = {
+                "ltp": vix_snap.get("ltp"),
+                "change": vix_snap.get("change"),
+                "change_pct": vix_snap.get("change_pct"),
+                "prev_close": vix_snap.get("prev_close"),
+                "open": vix_snap.get("todayOpen"),
+                "high": vix_snap.get("high"),
+                "low": vix_snap.get("low"),
+                "source": "history_snapshot",
+            }
     sectors = build_sector_strength_from_quotes(quotes)
     fo = get_cached("fo_breadth", ttl=120) or get_stale_cached("fo_breadth") or {}
     cooldown_seconds = max(0, int(_QUOTE_COOLDOWN_UNTIL - time.time()))
@@ -7617,7 +7952,8 @@ def get_previous_day_levels(symbol, fallback_symbol=None, cache_key=None, cache_
         "close": None,
     }
 
-    if not fyers:
+    active_client = get_request_fyers_client()
+    if not (active_client or fyers):
         return result
 
     symbols_to_try = unique_symbols([symbol, fallback_symbol])
@@ -7874,22 +8210,31 @@ def build_home_index_quote_card(symbol_key):
 
 
 def strip_labels_for_symbol(symbol_key):
-    cfg = INDEX_MAP[symbol_key]
+    cfg = INDEX_MAP.get(symbol_key, {})
     labels = [cfg.get("label", ""), symbol_key]
     if symbol_key == "BANKNIFTY":
         labels.extend(["NIFTY BANK", "BANKNIFTY", "BANK NIFTY"])
     elif symbol_key == "NIFTY":
         labels.extend(["NIFTY 50", "NIFTY"])
+    elif symbol_key == "SENSEX":
+        labels.extend(["BSE SENSEX", "SENSEX"])
+    elif symbol_key == "FINNIFTY":
+        labels.extend(["NIFTY FIN SERVICE", "FINNIFTY", "FIN NIFTY"])
+    elif symbol_key == "MIDCPNIFTY":
+        labels.extend(["NIFTY MID SELECT", "MIDCAP SELECT", "MIDCPNIFTY", "MIDCAP NIFTY"])
+    elif symbol_key == "BANKEX":
+        labels.extend(["BSE BANKEX", "BANKEX"])
     return {str(label or "").strip().upper() for label in labels if label}
 
 
 def build_fast_home_index_quote_card(symbol_key, market_strip=None, previous_card=None, future_quote=None):
-    cfg = INDEX_MAP[symbol_key]
+    cfg = INDEX_MAP.get(symbol_key, {})
     previous_card = previous_card or {}
     previous_spot = previous_card.get("spot", {}) if isinstance(previous_card, dict) else {}
     previous_future = previous_card.get("future", {}) if isinstance(previous_card, dict) else {}
+    fut_sym = cfg.get("future")
     future_metrics = extract_quote_metrics(
-        future_quote if future_quote is not None else get_quote_block(cfg["future"])
+        future_quote if future_quote is not None else (get_quote_block(fut_sym) if fut_sym else {})
     )
 
     labels = strip_labels_for_symbol(symbol_key)
@@ -7917,6 +8262,18 @@ def build_fast_home_index_quote_card(symbol_key, market_strip=None, previous_car
         spot["ltp"] = round2(history_ltp)
         spot["source"] = "history_5m"
         spot_ltp = history_ltp
+    if safe_float(spot.get("prev_close"), None) is None and history_snapshot.get("prev_close") is not None:
+        spot["prev_close"] = round2(history_snapshot.get("prev_close"))
+    if safe_float(spot.get("change"), None) is None and history_snapshot.get("change") is not None:
+        spot["change"] = round2(history_snapshot.get("change"))
+    if safe_float(spot.get("change_pct"), None) is None and history_snapshot.get("change_pct") is not None:
+        spot["change_pct"] = round2(history_snapshot.get("change_pct"))
+    if safe_float(spot.get("open"), None) is None and history_snapshot.get("todayOpen") is not None:
+        spot["open"] = round2(history_snapshot.get("todayOpen"))
+    if safe_float(spot.get("high"), None) is None and history_snapshot.get("high") is not None:
+        spot["high"] = round2(history_snapshot.get("high"))
+    if safe_float(spot.get("low"), None) is None and history_snapshot.get("low") is not None:
+        spot["low"] = round2(history_snapshot.get("low"))
     if future_ltp is None and history_ltp is not None:
         future_ltp = history_ltp
     future_vwap = clean_vwap_for_price(future_metrics.get("vwap"), future_ltp or spot_ltp)
@@ -8211,9 +8568,21 @@ def build_home_dashboard():
     previous_indices = previous_quote_payload.get("indices", {}) if isinstance(previous_quote_payload, dict) else {}
     future_quotes = current_index_future_quotes()
 
-    nifty_card = build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get(INDEX_MAP["NIFTY"]["future"]))
-    banknifty_card = build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get(INDEX_MAP["BANKNIFTY"]["future"]))
-    sensex_card = build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get(INDEX_MAP["SENSEX"]["future"]))
+    nifty_card = build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get((INDEX_MAP.get("NIFTY") or {}).get("future")))
+    banknifty_card = build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get((INDEX_MAP.get("BANKNIFTY") or {}).get("future")))
+    sensex_card = build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get((INDEX_MAP.get("SENSEX") or {}).get("future")))
+    finnifty_card = build_fast_home_index_quote_card("FINNIFTY", market_strip, previous_indices.get("FINNIFTY"), future_quotes.get((INDEX_MAP.get("FINNIFTY") or {}).get("future")))
+    midcpnifty_card = build_fast_home_index_quote_card("MIDCPNIFTY", market_strip, previous_indices.get("MIDCPNIFTY"), future_quotes.get((INDEX_MAP.get("MIDCPNIFTY") or {}).get("future")))
+    bankex_card = build_fast_home_index_quote_card("BANKEX", market_strip, previous_indices.get("BANKEX"), future_quotes.get((INDEX_MAP.get("BANKEX") or {}).get("future")))
+
+    indices_cards = {
+        "NIFTY": nifty_card,
+        "BANKNIFTY": banknifty_card,
+        "SENSEX": sensex_card,
+        "FINNIFTY": finnifty_card,
+        "MIDCPNIFTY": midcpnifty_card,
+        "BANKEX": bankex_card,
+    }
 
     vix = live_snapshot.get("vix", {})
     sectors = live_snapshot.get("sectorStrength", [])
@@ -8240,21 +8609,13 @@ def build_home_dashboard():
     home_breadth_stats = build_breadth_stats(ad_map.get("NIFTY", {}), sectors)
     set_cached("home_index_quotes", {
         "timestamp": timestamp,
-        "indices": {
-            "NIFTY": nifty_card,
-            "BANKNIFTY": banknifty_card,
-            "SENSEX": sensex_card,
-        },
+        "indices": indices_cards,
     })
 
     result = {
         "timestamp": timestamp,
         "marketStrip": market_strip,
-        "indices": {
-            "NIFTY": nifty_card,
-            "BANKNIFTY": banknifty_card,
-            "SENSEX": sensex_card,
-        },
+        "indices": indices_cards,
         "vix": vix,
         "sectorStrength": sectors,
         "foBreadth": fo,
@@ -8352,8 +8713,6 @@ def api_debug_runtime():
         "ok": True,
         "fyersInitialized": fyers is not None,
         "build": "option-dashboard-fo-breadth-20260531-1200",
-        "cwd": os.getcwd(),
-        "file": __file__,
         "testQuote": test_quote_resp,
         **get_fyers_env_status()
     })
@@ -8388,7 +8747,7 @@ def fyers_token_status():
     # session against FYERS so mobile does not show Connected for an expired or
     # rejected token.
     token_valid, validation_error = validate_fyers_session_token()
-    return jsonify({
+    resp = jsonify({
         "ok": True,
         "timestamp": ist_now().strftime("%d-%m-%Y %H:%M:%S"),
         "marketOpen": is_market_open(),
@@ -8396,6 +8755,8 @@ def fyers_token_status():
         "tokenValidationError": validation_error or None,
         **get_fyers_env_status(),
     })
+    resp.headers["Cache-Control"] = "no-store, private"
+    return resp
 
 @app.route("/api/fyers/login-url")
 def fyers_login_url():
@@ -8430,45 +8791,13 @@ def fyers_login_url():
 
 @app.route("/api/fyers/order", methods=["POST"])
 def fyers_place_order():
-    if not fyers:
-        return jsonify({"ok": False, "error": "Fyers not initialized. Please log in."}), 401
-    
-    payload = request.get_json(silent=True) or {}
-    symbol = payload.get("symbol")
-    qty = payload.get("qty", 1)
-    side = payload.get("side", 1) # 1: Buy, -1: Sell
-    order_type = payload.get("type", 2) # 2: Market, 1: Limit
-    product = payload.get("productType", "MARGIN") # MARGIN or INTRADAY
-    limit_price = payload.get("limitPrice", 0)
-
-    if not symbol:
-        return jsonify({"ok": False, "error": "Missing symbol"}), 400
-
-    order_data = {
-        "symbol": symbol,
-        "qty": int(qty),
-        "type": int(order_type),
-        "side": int(side),
-        "productType": product,
-        "limitPrice": float(limit_price),
-        "stopPrice": 0,
-        "validity": "DAY",
-        "disclosedQty": 0,
-        "offlineOrder": False,
-    }
-
-    try:
-        _client = get_request_fyers_client() or fyers
-        response = (_client or fyers).place_order(data=order_data)
-        if response.get("s") == "ok" or response.get("code") == 200:
-            return jsonify({"ok": True, "message": "Order placed successfully", "data": response})
-        else:
-            return jsonify({"ok": False, "error": response.get("message", "Order failed"), "data": response}), 400
-    except Exception as e:
-        print("Order placement error:", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({
+        "ok": False,
+        "error": "FYERS order placement is permanently disabled. MarketMantra uses Kotak Neo for trade execution."
+    }), 410
 
 @app.route("/api/fyers/save-token", methods=["POST"])
+@require_admin_key
 def fyers_save_token():
     global _QUOTE_COOLDOWN_UNTIL, FYERS_CLIENT_ID, FYERS_ACCESS_TOKEN, FYERS_ENV_MTIME, _FYERS_VALIDATION_CACHE
     load_dotenv(dotenv_path=ENV_PATH, override=True)
@@ -8481,17 +8810,39 @@ def fyers_save_token():
     if direct_token:
         access_token = normalize_fyers_access_token(client_id, direct_token)
         is_active_token = False
-        if fyersModel and client_id:
-            try:
-                test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
-                configure_fyers_timeout(test_inst)
-                test_prof = test_inst.get_profile() or {}
-                if test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"):
-                    is_active_token = True
-            except Exception:
-                pass
+        validation_err_msg = "Token validation failed with FYERS API."
 
-        if is_active_token or not looks_like_raw_fyers_auth_code(direct_token):
+        if not client_id:
+            return jsonify({
+                "ok": False,
+                "error": "FYERS_CLIENT_ID is not configured on this server.",
+                **get_fyers_env_status(),
+            }), 400
+
+        if not fyersModel:
+            return jsonify({
+                "ok": False,
+                "error": "FYERS SDK is unavailable on this server. Token validation cannot be performed.",
+                **get_fyers_env_status(),
+            }), 503
+
+        try:
+            test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+            configure_fyers_timeout(test_inst)
+            test_prof = test_inst.get_profile() or {}
+            if isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data")):
+                is_active_token = True
+            else:
+                validation_err_msg = "Token was rejected by FYERS API as invalid or expired."
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Failed to communicate with FYERS API during token validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 400
+
+        if is_active_token:
             save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
             mark_fyers_token_ready(client_id, access_token)
             refresh_fyers_from_env(force=True)
@@ -8507,23 +8858,28 @@ def fyers_save_token():
                 "ok": True,
                 "message": "Fyers access token verified and active for today.",
                 "tokenValid": True,
-                "accessToken": access_token,
-                "access_token": access_token,
                 "tokenValidationError": None,
                 **get_fyers_env_status(),
             })
-        else:
+        elif looks_like_raw_fyers_auth_code(direct_token):
             payload["authCode"] = direct_token
+        else:
+            return jsonify({
+                "ok": False,
+                "error": f"Invalid FYERS access token: {validation_err_msg}",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 400
 
     auth_code = extract_fyers_auth_code(payload.get("authCode") or payload.get("finalUrl"))
 
     # Never log auth_code/finalUrl: both are sensitive authentication material.
     if not fyersModel:
-        return jsonify({"ok": False, "error": "fyers_apiv3 package is not available."}), 200
+        return jsonify({"ok": False, "error": "FYERS SDK is unavailable on this server."}), 503
     if not client_id or not secret_key:
-        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY. On Render, add them in Environment Variables."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY on server."}), 400
     if not auth_code:
-        return jsonify({"ok": False, "error": "Paste the final Fyers redirect URL or auth_code."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS authorization code or redirect URL."}), 400
 
     try:
         session = fyersModel.SessionModel(
@@ -8540,9 +8896,20 @@ def fyers_save_token():
         if not access_token:
             return jsonify({
                 "ok": False,
-                "error": f"Fyers did not return an access_token. Reason: {resp.get('message', resp)}",
-                "response": resp,
-            }), 200
+                "error": "FYERS authorization code exchange failed to produce an access token.",
+            }), 400
+
+        # Validate with get_profile() before saving
+        test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+        configure_fyers_timeout(test_inst)
+        test_prof = test_inst.get_profile() or {}
+        if not (isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"))):
+            return jsonify({
+                "ok": False,
+                "error": "Exchanged token was rejected by FYERS profile validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 400
 
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
         mark_fyers_token_ready(client_id, access_token)
@@ -8559,35 +8926,40 @@ def fyers_save_token():
             "ok": True,
             "message": "Fyers token generated and connection initialized.",
             "tokenValid": True,
-            "accessToken": access_token,
-            "access_token": access_token,
             "tokenValidationError": None,
             **get_fyers_env_status(),
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 200
+    except Exception:
+        return jsonify({"ok": False, "error": "An error occurred during FYERS authorization code exchange."}), 500
 
 
-@app.route("/api/fyers/totp-login", methods=["POST", "GET"])
+@app.route("/api/fyers/totp-login", methods=["POST"])
+@require_admin_key
 def fyers_totp_login():
     global _QUOTE_COOLDOWN_UNTIL
     refresh_fyers_from_env()
-    payload = request.get_json(silent=True) or {}
-    
-    client_id = (payload.get("clientId") or os.getenv("FYERS_CLIENT_ID", "")).strip()
-    secret_key = (payload.get("secretKey") or os.getenv("FYERS_SECRET_KEY", "")).strip()
-    fyers_id = (payload.get("fyersId") or os.getenv("FYERS_ID", "")).strip()
-    fyers_pin = (payload.get("fyersPin") or payload.get("pin") or os.getenv("FYERS_PIN", "")).strip()
-    totp_key = (payload.get("totpKey") or os.getenv("FYERS_TOTP_KEY", "")).strip()
+
+    client_id = os.getenv("FYERS_CLIENT_ID", "").strip()
+    secret_key = os.getenv("FYERS_SECRET_KEY", "").strip()
+    fyers_id = os.getenv("FYERS_ID", "").strip()
+    fyers_pin = os.getenv("FYERS_PIN", "").strip()
+    totp_key = os.getenv("FYERS_TOTP_KEY", "").strip()
 
     if not client_id or not secret_key:
-        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY."}), 200
+        return jsonify({"ok": False, "error": "Missing FYERS_CLIENT_ID or FYERS_SECRET_KEY on server."}), 400
     if not fyers_id or not fyers_pin or not totp_key:
         return jsonify({
             "ok": False,
-            "error": "Missing TOTP credentials (FYERS_ID, FYERS_PIN, or FYERS_TOTP_KEY). Please provide them.",
+            "error": "Missing server TOTP credentials (FYERS_ID, FYERS_PIN, or FYERS_TOTP_KEY).",
             **get_fyers_env_status(),
-        }), 200
+        }), 400
+
+    if not fyersModel:
+        return jsonify({
+            "ok": False,
+            "error": "FYERS SDK is unavailable on this server. Token validation cannot be performed.",
+            **get_fyers_env_status(),
+        }), 503
 
     try:
         from totp_login import generate_fyers_token_via_totp
@@ -8599,43 +8971,43 @@ def fyers_totp_login():
             secret_key=secret_key
         )
         if not access_token:
-            return jsonify({"ok": False, "error": "Automated TOTP login failed to produce an access token."}), 200
+            return jsonify({"ok": False, "error": "Automated TOTP login failed to produce an access token."}), 502
+
+        # Mandatory pre-commit token validation with FYERS get_profile()
+        try:
+            test_inst = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="")
+            configure_fyers_timeout(test_inst)
+            test_prof = test_inst.get_profile() or {}
+            if not (isinstance(test_prof, dict) and (test_prof.get("s") == "ok" or test_prof.get("code") == 200 or test_prof.get("data"))):
+                return jsonify({
+                    "ok": False,
+                    "error": "Generated TOTP token was rejected by FYERS profile validation.",
+                    "tokenValid": False,
+                    **get_fyers_env_status(),
+                }), 502
+        except Exception:
+            return jsonify({
+                "ok": False,
+                "error": "Failed to communicate with FYERS API during TOTP token validation.",
+                "tokenValid": False,
+                **get_fyers_env_status(),
+            }), 502
 
         save_env_value(ENV_PATH, "FYERS_ACCESS_TOKEN", access_token)
-        if payload.get("fyersId"): save_env_value(ENV_PATH, "FYERS_ID", fyers_id)
-        if payload.get("fyersPin"): save_env_value(ENV_PATH, "FYERS_PIN", fyers_pin)
-        if payload.get("totpKey"): save_env_value(ENV_PATH, "FYERS_TOTP_KEY", totp_key)
-
+        mark_fyers_token_ready(client_id, access_token)
         _QUOTE_COOLDOWN_UNTIL = 0.0
         refresh_fyers_from_env(force=True)
         clear_live_market_caches()
 
         return jsonify({
             "ok": True,
-            "message": "TOTP Login successful! Access token generated and active.",
+            "message": "TOTP login successful. Token refreshed and active.",
+            "tokenValid": True,
+            "tokenValidationError": None,
             **get_fyers_env_status(),
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"TOTP Login Error: {str(e)}"}), 200
-
-
-@app.route("/api/fyers/save-totp-credentials", methods=["POST"])
-def fyers_save_totp_credentials():
-    payload = request.get_json(silent=True) or {}
-    fyers_id = payload.get("fyersId", "").strip()
-    fyers_pin = (payload.get("fyersPin") or payload.get("pin") or "").strip()
-    totp_key = payload.get("totpKey", "").strip()
-
-    if fyers_id: save_env_value(ENV_PATH, "FYERS_ID", fyers_id)
-    if fyers_pin: save_env_value(ENV_PATH, "FYERS_PIN", fyers_pin)
-    if totp_key: save_env_value(ENV_PATH, "FYERS_TOTP_KEY", totp_key)
-
-    refresh_fyers_from_env()
-    return jsonify({
-        "ok": True,
-        "message": "TOTP credentials saved to server configuration.",
-        **get_fyers_env_status(),
-    })
+    except Exception:
+        return jsonify({"ok": False, "error": "Automated TOTP authentication failed."}), 500
 
 
 YAHOO_INDEX_MAP = {
@@ -9067,9 +9439,12 @@ def home_ticker():
         previous_indices = previous_quote_payload.get("indices", {}) if isinstance(previous_quote_payload, dict) else {}
         future_quotes = current_index_future_quotes()
         indices = {
-            "NIFTY": build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get(INDEX_MAP["NIFTY"]["future"])),
-            "BANKNIFTY": build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get(INDEX_MAP["BANKNIFTY"]["future"])),
-            "SENSEX": build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get(INDEX_MAP["SENSEX"]["future"])),
+            "NIFTY": build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get((INDEX_MAP.get("NIFTY") or {}).get("future"))),
+            "BANKNIFTY": build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get((INDEX_MAP.get("BANKNIFTY") or {}).get("future"))),
+            "SENSEX": build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get((INDEX_MAP.get("SENSEX") or {}).get("future"))),
+            "FINNIFTY": build_fast_home_index_quote_card("FINNIFTY", market_strip, previous_indices.get("FINNIFTY"), future_quotes.get((INDEX_MAP.get("FINNIFTY") or {}).get("future"))),
+            "MIDCPNIFTY": build_fast_home_index_quote_card("MIDCPNIFTY", market_strip, previous_indices.get("MIDCPNIFTY"), future_quotes.get((INDEX_MAP.get("MIDCPNIFTY") or {}).get("future"))),
+            "BANKEX": build_fast_home_index_quote_card("BANKEX", market_strip, previous_indices.get("BANKEX"), future_quotes.get((INDEX_MAP.get("BANKEX") or {}).get("future"))),
         }
         set_cached("home_index_quotes", {
             "timestamp": live_snapshot.get("timestamp") or datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
@@ -9084,7 +9459,17 @@ def home_ticker():
             "BANKNIFTY": advance_decline_snapshot("BANKNIFTY"),
             "SENSEX": advance_decline_snapshot("SENSEX"),
         }
-        market_mood = compute_home_market_mood(indices, vix, sectors, ad_map, fo)
+        market_mood = compute_home_market_mood(
+            {
+                "NIFTY": indices["NIFTY"],
+                "BANKNIFTY": indices["BANKNIFTY"],
+                "SENSEX": indices["SENSEX"],
+            },
+            vix,
+            sectors,
+            ad_map,
+            fo,
+        )
         return jsonify({
             "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
             "marketStrip": market_strip,
@@ -9120,13 +9505,18 @@ def home_index_quotes():
         previous_indices = previous_quote_payload.get("indices", {}) if isinstance(previous_quote_payload, dict) else {}
         future_quotes = current_index_future_quotes()
 
+        indices = {
+            "NIFTY": build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get((INDEX_MAP.get("NIFTY") or {}).get("future"))),
+            "BANKNIFTY": build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get((INDEX_MAP.get("BANKNIFTY") or {}).get("future"))),
+            "SENSEX": build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get((INDEX_MAP.get("SENSEX") or {}).get("future"))),
+            "FINNIFTY": build_fast_home_index_quote_card("FINNIFTY", market_strip, previous_indices.get("FINNIFTY"), future_quotes.get((INDEX_MAP.get("FINNIFTY") or {}).get("future"))),
+            "MIDCPNIFTY": build_fast_home_index_quote_card("MIDCPNIFTY", market_strip, previous_indices.get("MIDCPNIFTY"), future_quotes.get((INDEX_MAP.get("MIDCPNIFTY") or {}).get("future"))),
+            "BANKEX": build_fast_home_index_quote_card("BANKEX", market_strip, previous_indices.get("BANKEX"), future_quotes.get((INDEX_MAP.get("BANKEX") or {}).get("future"))),
+        }
+
         result = {
             "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
-            "indices": {
-                "NIFTY": build_fast_home_index_quote_card("NIFTY", market_strip, previous_indices.get("NIFTY"), future_quotes.get(INDEX_MAP["NIFTY"]["future"])),
-                "BANKNIFTY": build_fast_home_index_quote_card("BANKNIFTY", market_strip, previous_indices.get("BANKNIFTY"), future_quotes.get(INDEX_MAP["BANKNIFTY"]["future"])),
-                "SENSEX": build_fast_home_index_quote_card("SENSEX", market_strip, previous_indices.get("SENSEX"), future_quotes.get(INDEX_MAP["SENSEX"]["future"])),
-            }
+            "indices": indices
         }
 
         set_cached("home_index_quotes", result)

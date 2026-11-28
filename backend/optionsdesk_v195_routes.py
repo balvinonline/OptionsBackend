@@ -64,6 +64,11 @@ def _save_kotak_session(client, session_at: str):
             "sessionAt": session_at,
             "edit_token": getattr(cfg, "edit_token", None),
             "edit_sid": getattr(cfg, "edit_sid", None),
+            "edit_rid": getattr(cfg, "edit_rid", None),
+            "data_center": getattr(cfg, "data_center", None),
+            "base_url": getattr(cfg, "base_url", None),
+            "feed_url": getattr(cfg, "feed_url", None),
+            "rt_url": getattr(cfg, "rt_url", None),
             "view_token": getattr(cfg, "view_token", None),
             "bearer_token": getattr(cfg, "bearer_token", None),
             "sid": getattr(cfg, "sid", None),
@@ -115,11 +120,21 @@ def _restore_kotak_session():
         cfg = client.configuration
         cfg.edit_token = edit_token
         cfg.edit_sid = edit_sid
+        cfg.edit_rid = data.get("edit_rid")
+        cfg.data_center = data.get("data_center")
+        cfg.base_url = data.get("base_url")
+        cfg.feed_url = data.get("feed_url")
+        cfg.rt_url = data.get("rt_url")
         cfg.view_token = data.get("view_token")
         cfg.bearer_token = data.get("bearer_token")
         cfg.sid = data.get("sid")
         cfg.ucc = data.get("ucc")
         cfg.userId = data.get("userId")
+        if hasattr(cfg, "resolve_dynamic_urls") and hasattr(client, "rest_client"):
+            try:
+                cfg.resolve_dynamic_urls(client.rest_client)
+            except Exception:
+                pass
 
         _KOTAK_CLIENT = client
         _KOTAK_SESSION_READY = True
@@ -493,6 +508,7 @@ def _ensure_kotak_scrip_master():
         import csv
         import json
         import urllib.request
+        import io
         from pathlib import Path
 
         cache_path = Path(tempfile.gettempdir()) / f"kotak_indices_master_{today}.json"
@@ -527,61 +543,65 @@ def _ensure_kotak_scrip_master():
         for seg, url in segments:
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                res = urllib.request.urlopen(req, timeout=20)
-                lines = res.read().decode("utf-8", errors="ignore").splitlines()
-                reader = csv.DictReader(lines)
+                with urllib.request.urlopen(req, timeout=25) as res:
+                    # Stream CSV rows incrementally via TextIOWrapper without buffering entire multi-megabyte CSV into RAM
+                    text_stream = io.TextIOWrapper(res, encoding="utf-8", errors="ignore")
+                    reader = csv.DictReader(text_stream)
 
-                for row in reader:
-                    sym = row.get("pSymbolName", "").strip().upper()
-                    if sym not in INDEX_NAMES:
-                        continue
-                    inst_type = row.get("pInstType", "").strip().upper()
-                    if inst_type not in ["OPTIDX", "FUTIDX", "IO", "IF"]:
-                        continue
+                    for row in reader:
+                        sym = (row.get("pSymbolName") or "").strip().upper()
+                        if sym not in INDEX_NAMES:
+                            continue
+                        inst_type = (row.get("pInstType") or "").strip().upper()
+                        if inst_type not in ["OPTIDX", "FUTIDX", "IO", "IF"]:
+                            continue
 
-                    ref = row.get("pScripRefKey", "").strip()
-                    ts = row.get("pTrdSymbol", "").strip()
-                    token = row.get("pSymbol", "").strip()
-                    lot = int(row.get("lLotSize") or 1)
-                    opt_type = row.get("pOptionType", "").strip().upper()
-                    raw_strike = row.get("dStrikePrice;", "0").strip()
-
-                    try:
-                        strike_f = float(raw_strike)
-                        strike = strike_f / 100.0 if strike_f > 100000 else strike_f
-                    except Exception:
-                        strike = 0.0
-
-                    m = re.search(r'(\d{2})([A-Z]{3})(\d{2})', ref)
-                    if m:
-                        dd, mon, yy = m.group(1), m.group(2), m.group(3)
-                        exp_norm = f"{dd}-{mon}-20{yy}"
-                        exp_compact = f"{dd}{mon}20{yy}"
-                        exp_short = f"{dd}{mon}{yy}"
+                        ref = (row.get("pScripRefKey") or "").strip()
+                        ts = (row.get("pTrdSymbol") or "").strip()
+                        token = (row.get("pSymbol") or "").strip()
+                        try:
+                            lot = int(row.get("lLotSize") or 1)
+                        except (ValueError, TypeError):
+                            lot = 1
+                        opt_type = (row.get("pOptionType") or "").strip().upper()
+                        raw_strike = (row.get("dStrikePrice;") or row.get("dStrikePrice") or "0").strip()
 
                         try:
-                            exp_dt = datetime.strptime(f"{dd}{mon}{yy}", "%d%b%y")
-                            exp_set[sym].add((exp_dt, exp_norm))
+                            strike_f = float(raw_strike)
+                            strike = strike_f / 100.0 if strike_f > 100000 else strike_f
                         except Exception:
-                            pass
+                            strike = 0.0
 
-                        contract_info = {
-                            "tradingSymbol": ts,
-                            "token": token,
-                            "lotSize": lot,
-                            "exchangeSegment": seg,
-                            "underlying": sym,
-                            "optionType": opt_type,
-                            "strike": strike,
-                            "expiry": exp_norm
-                        }
+                        m = re.search(r'(\d{2})([A-Z]{3})(\d{2})', ref)
+                        if m:
+                            dd, mon, yy = m.group(1), m.group(2), m.group(3)
+                            exp_norm = f"{dd}-{mon}-20{yy}"
+                            exp_compact = f"{dd}{mon}20{yy}"
+                            exp_short = f"{dd}{mon}{yy}"
 
-                        by_tsym[ts.upper()] = contract_info
-                        for e_key in [exp_norm, exp_compact, exp_short]:
-                            scrips[(sym, e_key, strike, opt_type)] = contract_info
-                            scrips_flat[f"{sym}|{e_key}|{strike}|{opt_type}"] = contract_info
+                            try:
+                                exp_dt = datetime.strptime(f"{dd}{mon}{yy}", "%d%b%y")
+                                exp_set[sym].add((exp_dt, exp_norm))
+                            except Exception:
+                                pass
+
+                            contract_info = {
+                                "tradingSymbol": ts,
+                                "token": token,
+                                "lotSize": lot,
+                                "exchangeSegment": seg,
+                                "underlying": sym,
+                                "optionType": opt_type,
+                                "strike": strike,
+                                "expiry": exp_norm
+                            }
+
+                            by_tsym[ts.upper()] = contract_info
+                            for e_key in [exp_norm, exp_compact, exp_short]:
+                                scrips[(sym, e_key, strike, opt_type)] = contract_info
+                                scrips_flat[f"{sym}|{e_key}|{strike}|{opt_type}"] = contract_info
             except Exception as e:
-                logger.error(f"Failed downloading {seg} scrip master: {e}")
+                logger.error(f"Failed streaming {seg} scrip master: {e}")
 
         sorted_exp = {}
         for sym, dt_tuples in exp_set.items():
@@ -1275,7 +1295,7 @@ def register_optionsdesk_v195_routes(app):
     @app.route("/api/kotakneo/order", methods=["POST"])
     @_require_mobile_auth
     def kotakneo_order():
-        global _DAILY_ORDER_COUNT
+        global _DAILY_ORDER_COUNT, _KOTAK_CLIENT, _KOTAK_SESSION_READY
         client_order_id = ""
         try:
             config = _kotak_config()
@@ -1401,27 +1421,21 @@ def register_optionsdesk_v195_routes(app):
                 _RECENT_ORDER_IDS.pop(client_order_id, None)
                 low_err = str(err_val or resp_dict.get("message") or "").lower()
                 if st_code == 100008 or "100008" in low_err or "unauthorized" in low_err:
-                    _KOTAK_SESSION_READY = False
-                    _KOTAK_CLIENT = None
-                    for path in (_SESSION_CACHE_FILE, _LOCAL_SESSION_CACHE_FILE):
-                        try:
-                            if os.path.exists(path):
-                                os.remove(path)
-                        except Exception:
-                            pass
-                    cur_ip = _outbound_ip() or "74.220.48.166"
+                    cur_ip = _outbound_ip() or "74.220.48.179"
                     err_msg = (
-                        f"Kotak Neo rejected order (Error 100008: Unauthorized). "
-                        f"Your session has expired. Please open Broker Connections and start a fresh live session with today's TOTP + MPIN."
+                        f"Kotak Neo rejected order (Error 100008: Unauthorized IP). "
+                        f"Your live session is active, but Kotak Neo requires outbound server IP {cur_ip} to be whitelisted. "
+                        f"Please open trade.kotakneo.com/trade-api and add {cur_ip} to your application's Whitelisted IPs."
                     )
                     return jsonify({
                         "ok": False,
                         "status": "REJECTED",
                         "error": err_msg,
                         "stCode": 100008,
-                        "sessionExpired": True,
+                        "sessionExpired": False,
+                        "outboundIp": cur_ip,
                         "data": _sanitize_for_json(resp_dict)
-                    }), 401
+                    }), 400
                 else:
                     err_msg = str(err_val or resp_dict.get("message") or "Kotak Neo rejected the order")
                 return jsonify({"ok": False, "error": err_msg, "data": _sanitize_for_json(resp_dict)}), 400
