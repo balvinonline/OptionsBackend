@@ -1765,7 +1765,7 @@ def background_future_oi_updater():
                                 _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
                                 break
                             
-                            if resp and resp.get("s") == "error" and resp.get("code") in (-300, 401, 403, 429):
+                            if resp and resp.get("s") == "error" and safe_int(resp.get("code"), None) in (-360, -300, 401, 403, 429):
                                 _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
                                 break
                                 
@@ -2303,7 +2303,16 @@ def build_trade_zones(spot, future, analytics, chain, history_snapshot=None):
 def quote_response_rate_limited(resp):
     if not isinstance(resp, dict):
         return False
-    return safe_int(resp.get("code"), None) == 429
+    code = safe_int(resp.get("code"), None)
+    if code in (429, -360):
+        return True
+    status_code = safe_int(resp.get("status"), None) or safe_int(resp.get("http_code"), None)
+    if status_code in (429, -360):
+        return True
+    msg = str(resp.get("message") or resp.get("error") or "").lower()
+    if "too many requests" in msg or "rate limit" in msg:
+        return True
+    return False
 
 
 def quote_block_has_value(block):
@@ -2906,6 +2915,9 @@ def get_quote_block(symbol):
             return block
     except Exception as e:
         print(f"quote error {symbol}: {e}")
+        err_msg = str(e).lower()
+        if "429" in err_msg or "-360" in err_msg or "rate limit" in err_msg:
+            _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
 
     return get_stale_quote_block(symbol)
 
@@ -2976,7 +2988,8 @@ def get_quotes_map(symbols, chunk_size=10, fallback_missing=True):
 
         except Exception as e:
             print(f"batch quote error for chunk {chunk}: {e}")
-            if "429" in str(e):
+            err_msg = str(e).lower()
+            if "429" in err_msg or "-360" in err_msg or "rate limit" in err_msg:
                 _QUOTE_COOLDOWN_UNTIL = time.time() + QUOTE_429_COOLDOWN
                 break
 
